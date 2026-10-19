@@ -1,0 +1,14 @@
+{
+  "name": "hail",
+  "description": "hail: talk to your other AI agents (Hermes, OpenClaw, Claude Code, any CLI agent) without copy-paste.",
+  "owner": {
+    "name": "kerneldottoday"
+  },
+  "plugins": [
+    {
+      "name": "hail",
+      "source": "./plugin",
+      "description": "Talk to your other AI agents (Hermes, OpenClaw, Claude Code, any CLI agent) locally or over SSH."
+    }
+  ]
+}
