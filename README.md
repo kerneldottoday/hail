@@ -33,7 +33,9 @@ uv tool install git+https://github.com/kerneldottoday/hail
 pipx install git+https://github.com/kerneldottoday/hail
 ```
 
-Python 3.10+. Then:
+Python 3.10+. The PyPI distribution name is `hail-agent`; it is unrelated to the
+[Hail](https://hail.is) genomics library, which also imports as `hail`. Install with
+`uv tool` or `pipx` (isolated environments) so the two never collide. Then:
 
 ```bash
 hail add hermes --preset hermes --host my-vps --set 'bin=~/.local/bin/hermes'
