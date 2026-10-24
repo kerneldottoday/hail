@@ -16,12 +16,12 @@ CONFIG = '[agents.hermes]\npreset = "hermes"\nhost = "vps"\n\n[agents.me]\nprese
 def fake_ask(monkeypatch):
     seen = []
 
-    def ask(agent, message):
-        seen.append((agent.name, message))
-        return Reply(agent=agent.name, text=f"echo:{message}", raw="", exit_code=0)
+    def ask(agent, message, env=None, mode="action", drop_env=()):
+        body = message.split("\n---\n", 1)[-1]  # drop the [hail] header
+        seen.append((agent.name, body))
+        return Reply(agent=agent.name, text=f"echo:{body}", raw="", exit_code=0)
 
-    monkeypatch.setattr(cli, "ask", ask)
-    monkeypatch.setattr(mcp, "ask", ask)
+    monkeypatch.setattr("hail.hub.ask", ask)
     return seen
 
 
@@ -37,7 +37,9 @@ def test_ask_text_and_json(agents_file, fake_ask, capsys):
     assert cli.main(["hermes", "hi", "there"]) == 0
     assert capsys.readouterr().out.strip() == "echo:hi there"
     assert cli.main(["hermes", "--json", "yo"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"agent": "hermes", "reply": "echo:yo", "exit_code": 0}
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["agent"] == "hermes" and payload["reply"] == "echo:yo" and payload["ok"] is True
+    assert payload["thread"].startswith("t-") and payload["hop"] == 1
 
 
 def test_ask_from_stdin(agents_file, fake_ask, monkeypatch):
@@ -125,7 +127,7 @@ def test_mcp_initialize_and_list():
     assert init["protocolVersion"] == "2025-03-26"
     assert rpc("initialize", {"protocolVersion": "1999"})["result"]["protocolVersion"] == "2025-06-18"
     names = [t["name"] for t in rpc("tools/list")["result"]["tools"]]
-    assert names == ["hail_list", "hail_ask"]
+    assert names == ["hail_list", "hail_ask", "hail_send", "hail_status", "hail_council", "hail_thread"]
     assert rpc("ping")["result"] == {}
 
 
@@ -163,16 +165,16 @@ def test_mcp_serve_loop():
 
 def test_cli_nonzero_exit(agents_file, monkeypatch, capsys):
     agents_file(CONFIG)
-    monkeypatch.setattr(cli, "ask", lambda a, m: Reply(agent=a.name, text="crash", raw="", exit_code=2))
+    monkeypatch.setattr("hail.hub.ask", lambda a, m, **kw: Reply(a.name, "crash", "", 2))
     assert cli.main(["hermes", "x"]) == 1
-    assert "exited with code 2" in capsys.readouterr().err
+    assert "exited with an error" in capsys.readouterr().err
 
 
 def test_mcp_nonzero_exit_is_error(agents_file, monkeypatch):
     agents_file(CONFIG)
-    monkeypatch.setattr(mcp, "ask", lambda a, m: Reply(agent=a.name, text="crash", raw="", exit_code=2))
+    monkeypatch.setattr("hail.hub.ask", lambda a, m, **kw: Reply(a.name, "crash", "", 2))
     res = rpc("tools/call", {"name": "hail_ask", "arguments": {"agent": "hermes", "message": "x"}})["result"]
-    assert res["isError"] and "exit code 2" in res["content"][0]["text"]
+    assert res["isError"] and "exited with an error" in res["content"][0]["text"]
 
 
 @pytest.mark.parametrize(

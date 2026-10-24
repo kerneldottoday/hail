@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .config import Agent
@@ -41,18 +42,27 @@ class Reply:
         return self.exit_code == 0
 
 
-def build(agent: Agent, message: str) -> Invocation:
+def build(
+    agent: Agent,
+    message: str,
+    env: Mapping[str, str] | None = None,
+    mode: str = "action",
+    drop_env: Sequence[str] = (),
+) -> Invocation:
+    """``env`` is exported to the agent (hail context); ``mode`` advice adds the preset's read-only flags;
+    ``drop_env`` names variables (secrets such as the Telegram token) the agent must not inherit."""
+    extra = dict(env or {})
     if agent.host is not None:
-        script = _remote_script(agent)
+        script = _remote_script(agent, extra, mode)
         ssh_argv: tuple[str, ...] = ("ssh", *SSH_OPTIONS, "--", agent.host, "sh -c " + shlex.quote(script))
         return Invocation(argv=ssh_argv, stdin=message)
-    env = _local_env(agent)
+    local_env = _local_env(agent, extra, drop_env)
     if agent.preset == "command":
-        return Invocation(argv=agent.command or "", stdin=message, shell=True, env=env)
-    template = get_preset(agent.preset).argv
+        return Invocation(argv=agent.command or "", stdin=message, shell=True, env=local_env)
+    template = _template(agent, mode)
     argv = tuple(_fill(t, agent, message) for t in template)
     program = os.path.expanduser(argv[0])
-    search = env["PATH"] if env else None
+    search = local_env.get("PATH") if local_env else None
     resolved = shutil.which(program, path=search) or program
     inline = MESSAGE in template
     if inline and resolved.lower().endswith(CMD_SHIM_SUFFIXES):
@@ -61,24 +71,36 @@ def build(agent: Agent, message: str) -> Invocation:
             f"agent '{agent.name}': {resolved} is a Windows batch shim, which cannot receive "
             "a message safely as an argument. Use preset 'command' with a program that reads stdin."
         )
-    return Invocation(argv=(resolved, *argv[1:]), stdin=None if inline else message, env=env)
+    return Invocation(argv=(resolved, *argv[1:]), stdin=None if inline else message, env=local_env)
 
 
-def _local_env(agent: Agent) -> dict[str, str] | None:
-    if not agent.path:
+def _template(agent: Agent, mode: str) -> tuple[str, ...]:
+    preset = get_preset(agent.preset)
+    return preset.argv + (preset.advice_argv if mode == "advice" else ())
+
+
+def _local_env(agent: Agent, extra: dict[str, str], drop: Sequence[str] = ()) -> dict[str, str] | None:
+    hidden = [k for k in drop if k in os.environ]
+    if not agent.path and not extra and not hidden:
         return None
-    dirs = [os.path.expanduser(p) for p in agent.path]
-    return {**os.environ, "PATH": os.pathsep.join([*dirs, os.environ.get("PATH", "")])}
+    env = {k: v for k, v in os.environ.items() if k not in hidden}
+    env.update(extra)
+    if agent.path:
+        dirs = [os.path.expanduser(p) for p in agent.path]
+        env["PATH"] = os.pathsep.join([*dirs, os.environ.get("PATH", "")])
+    return env
 
 
-def _remote_script(agent: Agent) -> str:
+def _remote_script(agent: Agent, extra: dict[str, str], mode: str) -> str:
     prefix = ""
+    if extra:
+        prefix += "export " + " ".join(f"{k}={shlex.quote(v)}" for k, v in sorted(extra.items(), key=_env_order)) + "; "
     if agent.path:
         dirs = ":".join(remote_quote(p) for p in agent.path)
-        prefix = f'export PATH={dirs}:"$PATH"; '
+        prefix += f'export PATH={dirs}:"$PATH"; '
     if agent.preset == "command":
         return prefix + (agent.command or "")
-    tokens = get_preset(agent.preset).argv
+    tokens = _template(agent, mode)
     rendered = " ".join('"$msg"' if t == MESSAGE else remote_quote(_fill(t, agent, "")) for t in tokens)
     if MESSAGE not in tokens:
         return f"{prefix}exec {rendered}"  # message stays on stdin
@@ -102,7 +124,18 @@ def remote_quote(token: str) -> str:
     return shlex.quote(token)
 
 
-def ask(agent: Agent, message: str) -> Reply:
+def _env_order(item: tuple[str, str]) -> int:
+    order = ("HAIL_THREAD", "HAIL_HOP", "HAIL_SELF")
+    return order.index(item[0]) if item[0] in order else len(order)
+
+
+def ask(
+    agent: Agent,
+    message: str,
+    env: Mapping[str, str] | None = None,
+    mode: str = "action",
+    drop_env: Sequence[str] = (),
+) -> Reply:
     message = message.strip()
     if not message:
         raise HailError("empty message")
@@ -110,7 +143,7 @@ def ask(agent: Agent, message: str) -> Reply:
         raise HailError("message contains a NUL byte")
     if len(message) > agent.max_chars:
         raise HailError(f"message too long ({len(message)} > {agent.max_chars} characters)")
-    inv = build(agent, message)
+    inv = build(agent, message, env=env, mode=mode, drop_env=drop_env)
     try:
         proc = subprocess.run(
             inv.argv,

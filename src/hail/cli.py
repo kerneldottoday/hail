@@ -11,10 +11,10 @@ import shutil
 import subprocess
 import sys
 
-from . import __version__
+from . import __version__, commands
 from .config import Agent, ConfigError, config_path, load_agents, parse_agent
 from .presets import PRESETS
-from .runner import SSH_OPTIONS, HailError, ask, remote_quote
+from .runner import SSH_OPTIONS, HailError, remote_quote
 
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -39,10 +39,29 @@ TEMPLATE = """\
 
 # [agents.reviewer]
 # preset = "claude"
+# skills = ["code-review", "python"]   # lets agents ask "a code reviewer" (hail ask --skill code-review)
+# cost = "high"                        # low | medium | high: the cheapest matching agent is picked
 
 # [agents.anything]
 # preset = "command"
 # command = "my-agent --stdin"   # receives the message on stdin
+
+# Agent-to-agent guard rails (defaults shown). Agents may ask each other for advice;
+# only the agents listed under [policy.act] may ask another one to act.
+# [policy]
+# max_hops = 3
+# max_calls_per_thread = 12
+# rate_per_minute = 30
+# [policy.talk]
+# hermes = ["reviewer", "openclaw"]
+# [policy.act]
+# hermes = ["openclaw"]
+
+# Watch the conversations in a Telegram group (one topic per thread).
+# [telegram]
+# chat_id = -1001234567890
+# token_file = "~/.config/hail/telegram.token"
+# allowed_users = [123456789]
 """
 
 
@@ -55,11 +74,28 @@ def main(argv: list[str] | None = None) -> int:
     if argv[0] in ("-V", "--version", "version"):
         print(f"hail {__version__}")
         return 0
-    commands = {"list": cmd_list, "init": cmd_init, "add": cmd_add, "doctor": cmd_doctor, "mcp": cmd_mcp}
+    table = {
+        "list": cmd_list,
+        "init": cmd_init,
+        "add": cmd_add,
+        "doctor": cmd_doctor,
+        "mcp": cmd_mcp,
+        "ask": commands.cmd_ask_skill,
+        "send": commands.cmd_send,
+        "status": commands.cmd_status,
+        "council": commands.cmd_council,
+        "log": commands.cmd_log,
+        "threads": commands.cmd_threads,
+        "thread": commands.cmd_thread,
+        "stop": commands.cmd_stop,
+        "resume": lambda a: commands.cmd_stop(a, stopped=False),
+        "telegram": commands.cmd_telegram,
+        "_task": commands.cmd_task,
+    }
     try:
-        if argv[0] in commands:
-            return commands[argv[0]](argv[1:])
-        return cmd_ask(argv)
+        if argv[0] in table:
+            return table[argv[0]](argv[1:])
+        return commands.cmd_ask(argv[0], argv[1:])
     except (ConfigError, HailError) as exc:
         print(f"hail: {exc}", file=sys.stderr)
         return 1
@@ -69,7 +105,16 @@ def usage() -> str:
     return (
         f"hail {__version__} - talk to your AI agents from anywhere\n\n"
         '  hail <agent> "message"     ask an agent (or pipe the message on stdin)\n'
-        "  hail <agent> --json ...     print agent, reply and exit code as JSON\n"
+        "      [--json] [--thread T] [--mode advice|action] [--from NAME]\n"
+        '  hail ask --skill S "msg"    ask the cheapest agent that has skill S\n'
+        '  hail send <agent> "msg"     run in the background, prints a task id\n'
+        "  hail status <task>          state and result of a background task\n"
+        '  hail council --agents a,b [--synth c] "question"\n'
+        "                              ask several agents, then one synthesizes\n"
+        "  hail log [-n N] [--grep X]  recent messages between agents\n"
+        "  hail threads | thread <id>  list threads | show one thread\n"
+        "  hail stop|resume <thread>   block or reopen a thread\n"
+        "  hail telegram test|watch    check the Telegram channel | take commands from it\n"
         "  hail list                   list configured agents\n"
         "  hail init                   create the agents file\n"
         "  hail add <name> --preset <p> [--host <ssh-alias>] [--set key=value]\n"
@@ -80,31 +125,14 @@ def usage() -> str:
     )
 
 
-def cmd_ask(argv: list[str]) -> int:
-    name, rest = argv[0], argv[1:]
-    as_json = "--json" in rest
-    words = [w for w in rest if w != "--json"]
-    message = " ".join(words) if words else _read_stdin()
-    agents = load_agents()
-    if name not in agents:
-        raise ConfigError(f"unknown agent '{name}' (configured: {', '.join(agents) or 'none'})")
-    reply = ask(agents[name], message)
-    if as_json:
-        print(json.dumps({"agent": reply.agent, "reply": reply.text, "exit_code": reply.exit_code}, ensure_ascii=False))
-    else:
-        print(reply.text)
-    if not reply.ok:
-        print(f"hail: '{name}' exited with code {reply.exit_code}", file=sys.stderr)
-    return 0 if reply.ok else 1
-
-
 def cmd_list(_argv: list[str]) -> int:
     agents = load_agents()
     if not agents:
         print(f"no agents yet - edit {config_path()} or run: hail add")
     for agent in agents.values():
         where = agent.host or "local"
-        print(f"{agent.name:<16} {agent.preset:<9} {where:<16} {agent.description}")
+        card = f" [{', '.join(agent.skills)} · {agent.cost}]" if agent.skills else ""
+        print(f"{agent.name:<16} {agent.preset:<9} {where:<16} {agent.description}{card}")
     return 0
 
 
@@ -226,12 +254,6 @@ def _pairs(items: list[str]) -> dict:
             raise ConfigError(f"--set {key}: control characters are not allowed")
         pairs[key] = int(value) if key in INT_KEYS and value.isdigit() else value
     return pairs
-
-
-def _read_stdin() -> str:
-    if sys.stdin is None or sys.stdin.isatty():
-        raise HailError("no message (pass it as an argument or on stdin)")
-    return sys.stdin.read()
 
 
 def _utf8_stdout() -> None:

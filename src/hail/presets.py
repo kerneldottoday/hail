@@ -20,6 +20,7 @@ class Preset:
     parser: str = "text"
     defaults: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     description: str = ""
+    advice_argv: tuple[str, ...] = ()  # appended in advice mode (read-only answers)
 
 
 PRESETS: Mapping[str, Preset] = MappingProxyType(
@@ -49,6 +50,7 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
         "claude": Preset(
             argv=("{bin}", "-p"),
             defaults=MappingProxyType({"bin": "claude"}),
+            advice_argv=("--permission-mode", "plan"),
             description="Claude Code in print mode (claude -p, prompt on stdin)",
         ),
         "command": Preset(

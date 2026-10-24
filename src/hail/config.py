@@ -17,15 +17,39 @@ else:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib
 
 from . import parsers
+from .policy import Policy, PolicyError, parse_policy
 from .presets import get_preset
 
 DEFAULT_TIMEOUT = 180
 DEFAULT_MAX_CHARS = 8000
-RESERVED_NAMES = frozenset({"list", "init", "add", "doctor", "mcp", "help", "version"})
+RESERVED_NAMES = frozenset(
+    {
+        "list",
+        "init",
+        "add",
+        "doctor",
+        "mcp",
+        "help",
+        "version",
+        "ask",
+        "send",
+        "status",
+        "council",
+        "log",
+        "thread",
+        "threads",
+        "stop",
+        "resume",
+        "telegram",
+    }
+)
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9_.@:\[\]-]+$")
 LOCAL_HOSTS = frozenset({"", "local", "localhost"})
-KNOWN_KEYS = frozenset({"preset", "host", "timeout", "max_chars", "command", "parser", "path", "description"})
+KNOWN_KEYS = frozenset(
+    {"preset", "host", "timeout", "max_chars", "command", "parser", "path", "description", "skills", "cost"}
+)
+COSTS = ("low", "medium", "high")
 
 
 class ConfigError(ValueError):
@@ -44,6 +68,8 @@ class Agent:
     path: tuple[str, ...] = ()
     description: str = ""
     variables: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    skills: tuple[str, ...] = ()
+    cost: str = "medium"
 
     @property
     def is_remote(self) -> bool:
@@ -57,18 +83,41 @@ def config_path() -> Path:
     return Path.home() / ".config" / "hail" / "agents.toml"
 
 
+@dataclass(frozen=True)
+class Config:
+    agents: Mapping[str, Agent]
+    policy: Policy
+    telegram: Mapping[str, Any] | None
+
+
 def load_agents(path: Path | None = None) -> dict[str, Agent]:
+    return dict(load_config(path).agents)
+
+
+def load_config(path: Path | None = None) -> Config:
     path = path or config_path()
-    if not path.is_file():
-        raise ConfigError(f"no agents file at {path} (run: hail init)")
-    try:
-        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{path}: invalid TOML: {exc}") from None
+    data = _read(path)
     table = data.get("agents", {})
     if not isinstance(table, dict):
         raise ConfigError(f"{path}: [agents] must be a table")
-    return {name: parse_agent(name, raw) for name, raw in table.items()}
+    try:
+        policy = parse_policy(data.get("policy"))
+    except PolicyError as exc:
+        raise ConfigError(f"{path}: {exc}") from None
+    telegram = data.get("telegram")
+    if telegram is not None and not isinstance(telegram, dict):
+        raise ConfigError(f"{path}: [telegram] must be a table")
+    agents = {name: parse_agent(name, raw) for name, raw in table.items()}
+    return Config(agents=MappingProxyType(agents), policy=policy, telegram=telegram)
+
+
+def _read(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ConfigError(f"no agents file at {path} (run: hail init)")
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path}: invalid TOML: {exc}") from None
 
 
 def parse_agent(name: str, raw: Any) -> Agent:
@@ -107,7 +156,21 @@ def parse_agent(name: str, raw: Any) -> Agent:
         path=tuple(path),
         description=str(raw.get("description", preset.description)),
         variables=MappingProxyType(variables),
+        skills=_skills(name, raw.get("skills", [])),
+        cost=_cost(name, raw.get("cost", "medium")),
     )
+
+
+def _skills(name: str, value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(s, str) and s.strip() for s in value):
+        raise ConfigError(f"agent '{name}': 'skills' must be a list of words")
+    return tuple(s.strip().lower() for s in value)
+
+
+def _cost(name: str, value: Any) -> str:
+    if value not in COSTS:
+        raise ConfigError(f"agent '{name}': 'cost' must be one of {', '.join(COSTS)}")
+    return str(value)
 
 
 def _host(name: str, value: Any) -> str | None:
