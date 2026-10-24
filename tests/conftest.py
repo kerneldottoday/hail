@@ -3,8 +3,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_hail(tmp_path, monkeypatch):
-    """Keep the journal in a temp dir and run as if called by the user, never by an agent."""
+    """Keep config and journal in a temp dir and run as if called by the user, never by an agent."""
     monkeypatch.setenv("HAIL_HOME", str(tmp_path / "hail-home"))
+    monkeypatch.setenv("HAIL_CONFIG", str(tmp_path / "no-agents.toml"))  # never the developer's real config
     for name in ("HAIL_THREAD", "HAIL_HOP", "HAIL_SELF", "HAIL_TELEGRAM_TOKEN"):
         monkeypatch.delenv(name, raising=False)
 

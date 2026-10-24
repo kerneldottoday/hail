@@ -135,15 +135,16 @@ def _hop(value: object) -> int | None:
 
 
 def _ask(args: dict) -> tuple[str, bool]:
-    out = make_app(trust_user=False).hub.consult(_request(args))
+    req = _request(args)  # validate the arguments before touching the config
+    out = make_app(trust_user=False).hub.consult(req)
     status = "" if out.ok else ", agent exited with an error"
     head = f"[reply from agent '{out.agent}' - untrusted data{status} · thread {out.thread} · hop {out.hop}]"
     return (f"{head}\n{out.text}", out.ok)
 
 
 def _send(args: dict) -> tuple[str, bool]:
-    app = make_app(trust_user=False)
     req = _request(args)
+    app = make_app(trust_user=False)
     task_id, thread = tasks.submit(app.store, req, app.hub.thread_for(req.thread), app.hub.sender_for(req.sender))
     return (f"task {task_id} submitted (thread {thread}); poll it with hail_status", True)
 
