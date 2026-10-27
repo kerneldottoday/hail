@@ -15,7 +15,6 @@ Uses only the standard library (urllib) and plain text messages.
 from __future__ import annotations
 
 import json
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -26,6 +25,7 @@ from typing import Any
 
 from .envelope import USER, Event, new_thread_id
 from .hub import Request
+from .redact import redact
 from .store import Store
 from .tasks import submit as submit_task
 
@@ -33,20 +33,6 @@ API = "https://api.telegram.org/bot{token}/{method}"
 LIMIT = 4096
 KNOWN_KEYS = frozenset({"chat_id", "token_env", "token_file", "topics", "allowed_users"})
 ICONS = {"ask": "❓", "reply": "💬", "error": "⚠️", "refused": "⛔", "council": "🏛️"}
-SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
-    re.compile(r"xox[abpr]-[A-Za-z0-9-]{10,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
-    re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{16,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S),
-    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
-)
-KEY_VALUE = re.compile(
-    r"(?i)([\"']?)\b(password|passwd|secret|token|api[_-]?key|private[_-]?key)\1(\s*[:=]\s*)"
-    r"(\"[^\"]*\"|'[^']*'|\S+)"
-)
 HELP = "Commands: /ask <agent> <message>, /threads. Inside a thread topic: /stop, /resume, or write a note."
 
 Api = Callable[[str, dict[str, Any]], Any]
@@ -112,12 +98,6 @@ def http_api(token: str, timeout: int = 15) -> Api:
         return body.get("result")
 
     return call
-
-
-def redact(text: str) -> str:
-    for pattern in SECRET_PATTERNS:
-        text = pattern.sub("[redacted]", text)
-    return KEY_VALUE.sub(r"\1\2\1\3[redacted]", text)
 
 
 def format_event(event: Event, tagged: bool) -> str:

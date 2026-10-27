@@ -15,6 +15,7 @@ from . import __version__, commands, jobs_inbox
 from .config import Agent, ConfigError, config_path, load_agents, parse_agent
 from .presets import PRESETS
 from .runner import SSH_OPTIONS, HailError, remote_quote
+from .store import default_store
 
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -57,6 +58,10 @@ TEMPLATE = """\
 # [policy.act]
 # hermes = ["openclaw"]
 
+# Keep the journal (~/.hail/hail.db) small: prune older messages once a day.
+# [journal]
+# retention_days = 90
+
 # Watch the conversations in a Telegram group (one topic per thread).
 # [telegram]
 # chat_id = -1001234567890
@@ -92,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         "telegram": commands.cmd_telegram,
         "jobs": jobs_inbox.cmd_jobs,
         "inbox": jobs_inbox.cmd_inbox,
+        "prune": cmd_prune,
         "_task": commands.cmd_task,
     }
     try:
@@ -120,6 +126,7 @@ def usage() -> str:
         "  hail jobs [agent] [--all]   what agents have scheduled (UTC + local time)\n"
         "  hail inbox [agent] [--all]  what agents delivered since you last looked\n"
         "  hail inbox read <agent> <id> | clear [agent]\n"
+        "  hail prune --days N         delete journal entries older than N days\n"
         "  hail list                   list configured agents\n"
         "  hail init                   create the agents file\n"
         "  hail add <name> --preset <p> [--host <ssh-alias>] [--set key=value]\n"
@@ -188,6 +195,18 @@ def cmd_doctor(_argv: list[str]) -> int:
         failures += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {agent.name:<16} {detail}")
     return 1 if failures else 0
+
+
+def cmd_prune(argv: list[str]) -> int:
+    try:
+        days = int(argv[1]) if len(argv) == 2 and argv[0] == "--days" else 0
+    except ValueError:
+        days = 0
+    if days <= 0:
+        raise HailError("usage: hail prune --days N (N > 0)")
+    removed = default_store().prune(days)
+    print(f"removed {removed} message(s) older than {argv[1]} days")
+    return 0
 
 
 def cmd_mcp(_argv: list[str]) -> int:

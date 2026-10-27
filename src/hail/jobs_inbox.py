@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -17,6 +18,13 @@ from .store import Store, default_store
 UNTRUSTED = "[untrusted: written by an agent, verify before relying on it]"
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 FAR = datetime(9999, 1, 1, tzinfo=timezone.utc)
+ESCAPES = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]")  # CSI, OSC, others
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # keeps \t and \n
+
+
+def clean(value: object) -> str:
+    """Feed text as printable: no terminal escape sequences from what an agent wrote."""
+    return CONTROL.sub("", ESCAPES.sub("", str(value)))
 
 
 @dataclass(frozen=True)
@@ -102,13 +110,13 @@ def _active(row: dict[str, Any]) -> bool:
 def render_jobs(rows: list[dict[str, Any]], tz: tzinfo | None) -> str:
     if not rows:
         return "no scheduled jobs"
-    lines = []
+    lines = [UNTRUSTED]
     for r in rows:
-        last = r.get("last_status") or "never run"
+        last = clean(r.get("last_status") or "never run")
         lines.append(
-            f"{r['agent']}/{r.get('id', '')}  {r.get('name', '')}  [{r.get('state') or '-'}]\n"
+            f"{r['agent']}/{clean(r.get('id', ''))}  {clean(r.get('name', ''))}  [{clean(r.get('state') or '-')}]\n"
             f"    next: {feeds.format_when(feeds.parse_time(r.get('next_run')), tz)}"
-            f"  · schedule: {r.get('schedule') or '-'}  · last: {last}"
+            f"  · schedule: {clean(r.get('schedule') or '-')}  · last: {last}"
         )
     return "\n".join(lines)
 
@@ -147,13 +155,13 @@ def render_inbox(rows: list[dict[str, Any]], tz: tzinfo | None) -> str:
     new = sum(1 for r in rows if not r["seen"])
     if not rows:
         return "inbox: nothing new"
-    lines = [f"inbox: {new} new" + (f", {len(rows) - new} already read" if len(rows) > new else "")]
+    lines = [f"inbox: {new} new" + (f", {len(rows) - new} already read" if len(rows) > new else ""), UNTRUSTED]
     for r in rows:
         mark = " " if r["seen"] else "*"
-        job = r.get("job_name") or r.get("job") or ""
+        job = clean(r.get("job_name") or r.get("job") or "")
+        when = feeds.format_when(feeds.parse_time(r.get("created")), tz)
         lines.append(
-            f"{mark} {r['agent']} {r['id']}  ({job}, {feeds.format_when(feeds.parse_time(r.get('created')), tz)})\n"
-            f"    {str(r.get('preview') or '')[:160]}"
+            f"{mark} {r['agent']} {clean(r['id'])}  ({job}, {when})\n    {clean(r.get('preview') or '')[:160]}"
         )
     lines.append("read one: hail inbox read <agent> <id>  · mark all read: hail inbox clear")
     return "\n".join(lines)
@@ -166,7 +174,7 @@ def read_item(agent_name: str, item_id: str, store: Store) -> str:
     if not isinstance(data, dict) or not isinstance(data.get("text"), str):
         raise HailError(f"'{agent_name}' feed: unexpected reply for {item_id}")
     store.mark_seen(agent.name, [item_id])
-    return f"{UNTRUSTED}\n--- {agent.name} {item_id} ---\n{data['text']}"
+    return f"{UNTRUSTED}\n--- {agent.name} {item_id} ---\n{clean(data['text'][: feeds.MAX_READ_CHARS])}"
 
 
 def clear(agent_name: str | None, store: Store) -> tuple[int, list[str]]:

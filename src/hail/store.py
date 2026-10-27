@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .redact import redact
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, thread TEXT NOT NULL, hop INTEGER NOT NULL,
@@ -37,6 +39,8 @@ CREATE TABLE IF NOT EXISTS inbox_seen (
 );
 """
 MESSAGE_COLUMNS = "id, ts, thread, hop, sender, recipient, kind, mode, text"
+DAY = 86400
+ACTIVE = "('submitted', 'working')"
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,10 @@ class Store:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
+            try:
+                db.execute("PRAGMA journal_mode=WAL")  # readers never wait for the writer; persistent once set
+            except sqlite3.OperationalError:
+                pass  # another process holds the lock right now: it is setting WAL too, or already did
             db.executescript(SCHEMA)
 
     @contextmanager
@@ -117,7 +125,7 @@ class Store:
         with self._db() as db:
             cur = db.execute(
                 "INSERT INTO messages (ts, thread, hop, sender, recipient, kind, mode, text) VALUES (?,?,?,?,?,?,?,?)",
-                (time.time(), thread, hop, sender, recipient, kind, mode, text),
+                (time.time(), thread, hop, sender, recipient, kind, mode, redact(text)),
             )
             return int(cur.lastrowid or 0)
 
@@ -134,7 +142,7 @@ class Store:
         try:
             db.execute("BEGIN IMMEDIATE")
             reason = _budget_reason(db, thread, now, max_calls, rate)
-            kind, body = ("refused", reason) if reason else ("ask", text)
+            kind, body = ("refused", reason) if reason else ("ask", redact(text))
             db.execute(
                 "INSERT INTO messages (ts, thread, hop, sender, recipient, kind, mode, text) VALUES (?,?,?,?,?,?,?,?)",
                 (now, thread, hop, sender, recipient, kind, mode, body),
@@ -149,8 +157,18 @@ class Store:
         return reason
 
     def count_active_tasks(self) -> int:
-        row = self._one("SELECT COUNT(*) FROM tasks WHERE status IN ('submitted', 'working')", ())
+        row = self._one(f"SELECT COUNT(*) FROM tasks WHERE status IN {ACTIVE}", ())
         return int(row[0]) if row else 0
+
+    def reap_stale(self, max_age: float) -> int:
+        """Fail tasks not updated for ``max_age`` seconds: their worker died (reboot, kill)."""
+        now = time.time()
+        with self._db() as db:
+            cur = db.execute(
+                f"UPDATE tasks SET status = 'failed', error = ?, updated = ? WHERE status IN {ACTIVE} AND updated < ?",
+                ("stale: the background worker stopped without reporting", now, now - max_age),
+            )
+            return cur.rowcount
 
     def thread(self, thread: str) -> tuple[Message, ...]:
         return self._messages("WHERE thread = ? ORDER BY id", (thread,))
@@ -240,7 +258,7 @@ class Store:
         with self._db() as db:
             db.execute(
                 "UPDATE tasks SET status = ?, result = ?, error = ?, updated = ? WHERE id = ?",
-                (status, result, error, time.time(), task_id),
+                (status, redact(result), redact(error), time.time(), task_id),
             )
 
     def get_task(self, task_id: str) -> Task | None:
@@ -250,6 +268,34 @@ class Store:
         if not row:
             return None
         return Task(row[0], row[1], json.loads(row[2]), row[3], row[4], row[5], row[6])
+
+    # retention ----------------------------------------------------------------
+
+    def prune(self, older_than_days: int) -> int:
+        """Delete messages, empty threads and finished tasks older than N days; returns messages removed."""
+        if not isinstance(older_than_days, int) or isinstance(older_than_days, bool) or older_than_days <= 0:
+            raise ValueError("days must be a positive integer")
+        cutoff = time.time() - older_than_days * DAY
+        with self._db() as db:
+            removed = db.execute("DELETE FROM messages WHERE ts < ?", (cutoff,)).rowcount
+            db.execute(
+                "DELETE FROM threads WHERE created < ? AND thread NOT IN (SELECT DISTINCT thread FROM messages)",
+                (cutoff,),
+            )
+            db.execute(f"DELETE FROM tasks WHERE updated < ? AND status NOT IN {ACTIVE}", (cutoff,))
+        return removed
+
+    def auto_prune(self, retention_days: int | None) -> int:
+        """Apply ``[journal] retention_days`` at most once a day."""
+        if not retention_days:
+            return 0
+        last = float(self.get_meta("last_prune") or 0)
+        now = time.time()
+        if now - last < DAY:
+            return 0
+        removed = self.prune(retention_days)
+        self.set_meta("last_prune", str(now))  # only once it worked, so a failure is retried
+        return removed
 
     # meta -------------------------------------------------------------------
 

@@ -80,17 +80,24 @@ def list_items(names):
         for name in files:
             path = os.path.join(root, name)
             rel = os.path.relpath(path, outputs).replace(os.sep, "/")
-            if rel.count("/") > 1 or name.startswith("."):
-                continue
-            found.append((os.path.getmtime(path), rel, path))
+            if rel.count("/") > 1 or name.startswith(".") or not os.path.isfile(path):
+                continue  # a FIFO or socket would block open()
+            try:
+                found.append((os.path.getmtime(path), rel, path))
+            except OSError:
+                continue  # removed by a cron cleanup meanwhile
     found.sort(reverse=True)
     items = []
     for _mtime, rel, path in found[:MAX_ITEMS]:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            preview = " ".join(fh.read(PREVIEW * 2).split())[:PREVIEW]
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                preview = " ".join(fh.read(PREVIEW * 2).split())[:PREVIEW]
+            created, size = iso_mtime(path), os.path.getsize(path)
+        except OSError:
+            continue
         job = item_job(rel)
-        items.append({"id": rel, "job": job, "job_name": names.get(job, ""), "created": iso_mtime(path),
-                      "size": os.path.getsize(path), "preview": preview})
+        items.append({"id": rel, "job": job, "job_name": names.get(job, ""), "created": created,
+                      "size": size, "preview": preview})
     return items
 
 

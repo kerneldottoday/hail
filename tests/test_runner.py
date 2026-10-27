@@ -15,14 +15,14 @@ def test_remote_hermes_script():
     agent = parse_agent("h", {"preset": "hermes", "host": "vps", "bin": "~/.local/bin/hermes"})
     inv = build(agent, "hi")
     assert inv.argv[:7] == ("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", "vps")
-    assert 'msg=$(cat); exec "$HOME/.local/bin/hermes" chat -q "$msg" -Q --max-turns 8' in inv.argv[-1]
+    assert 'msg=$(cat); exec "$@" "$HOME/.local/bin/hermes" chat -q "$msg" -Q --max-turns 8' in inv.argv[-1]
     assert inv.stdin == "hi"
 
 
 def test_remote_path_prefix_and_command():
     agent = parse_agent("c", {"preset": "command", "host": "vps", "command": "ask-x", "path": ["~/bin", "/opt/b"]})
     script = build(agent, "m").argv[-1]
-    assert 'export PATH="$HOME/bin":/opt/b:"$PATH"; ask-x' in script
+    assert 'export PATH="$HOME/bin":/opt/b:"$PATH"; ' in script and 'exec "$@" sh -c ask-x' in script
 
 
 def test_local_command_uses_shell_and_stdin():
@@ -42,7 +42,7 @@ def test_stdin_preset_local_and_remote():
     local = build(parse_agent("c", {"preset": "claude", "bin": "nope-xyz"}), "hi")
     assert local.argv == ("nope-xyz", "-p") and local.stdin == "hi"
     remote = build(parse_agent("c", {"preset": "claude", "host": "vps"}), "hi")
-    assert remote.argv[-1] == "sh -c 'exec claude -p'" and remote.stdin == "hi"
+    assert remote.argv[-1].endswith("exec \"$@\" claude -p'") and remote.stdin == "hi"
 
 
 def test_windows_batch_shim_is_refused(monkeypatch):

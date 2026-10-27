@@ -16,6 +16,7 @@ from .presets import get_preset
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
 MESSAGE = "{message}"
 CMD_SHIM_SUFFIXES = (".cmd", ".bat")
+KILL_GRACE = 5  # seconds between TERM and KILL on the server
 
 
 class HailError(RuntimeError):
@@ -98,13 +99,16 @@ def _remote_script(agent: Agent, extra: dict[str, str], mode: str) -> str:
     if agent.path:
         dirs = ":".join(remote_quote(p) for p in agent.path)
         prefix += f'export PATH={dirs}:"$PATH"; '
+    # Bound the agent on the server too: killing the local ssh does not stop it there.
+    # Probe rather than look it up: an old BusyBox timeout without -k would refuse to start the agent.
+    prefix += f"timeout -k 1 1 true >/dev/null 2>&1 && set -- timeout -k {KILL_GRACE} {agent.timeout}; "
     if agent.preset == "command":
-        return prefix + (agent.command or "")
+        return f'{prefix}exec "$@" sh -c {shlex.quote(agent.command or "")}'
     tokens = _template(agent, mode)
     rendered = " ".join('"$msg"' if t == MESSAGE else remote_quote(_fill(t, agent, "")) for t in tokens)
     if MESSAGE not in tokens:
-        return f"{prefix}exec {rendered}"  # message stays on stdin
-    return f"{prefix}msg=$(cat); exec {rendered}"
+        return f'{prefix}exec "$@" {rendered}'  # message stays on stdin
+    return f'{prefix}msg=$(cat); exec "$@" {rendered}'
 
 
 def _fill(token: str, agent: Agent, message: str) -> str:

@@ -1,6 +1,6 @@
 # hail
 
-**Talk to your AI agents from anywhere, and let them talk to each other.** One command to message Hermes, OpenClaw, Claude Code, or any CLI agent, on this machine or on a server over SSH, from your terminal or from any MCP client. When an agent is stuck, it can consult another one itself, with loop guards, a journal and an optional Telegram channel to watch it happen.
+**Talk to your AI agents from anywhere, and let them talk to each other.** One command to message Hermes, OpenClaw, Claude Code, Codex, Gemini CLI, a local Ollama model or any CLI agent, on this machine or on a server over SSH, from your terminal or from any MCP client. When an agent is stuck, it can consult another one itself, with loop guards, a journal and an optional Telegram channel to watch it happen.
 
 ```bash
 hail hermes "Is the nightly scraper still running? One line."
@@ -14,7 +14,7 @@ No copy-paste between chat windows. No new server, no open port, no runtime depe
 
 You run agents in different places: Hermes on a VPS, OpenClaw behind Telegram, Claude Code on your laptop. Getting them to talk usually means copying text between windows, or deploying a dashboard and opening an API to the internet.
 
-hail is the small missing piece: a thin, auditable bridge (about 2,000 lines of Python, standard library only) that turns "ask that agent" into a single command or MCP tool call, for you and for your agents.
+hail is the small missing piece: a thin, auditable bridge (about 3,000 lines of Python, standard library only) that turns "ask that agent" into a single command or MCP tool call, for you and for your agents.
 
 | | hail | Agent dashboards | Per-agent MCP bridges |
 |---|---|---|---|
@@ -95,7 +95,12 @@ parser = "json:answer"       # optional: text (default), hermes, json:<key>
 | `hermes` | `hermes chat -q <msg> -Q --max-turns 8` | strips session id and cost bar |
 | `openclaw` | `openclaw agent --agent <id> --session-key hail --message <msg> --json` | `finalAssistantVisibleText` |
 | `claude` | `claude -p`, message on stdin | plain text |
+| `codex` | `codex exec --skip-git-repo-check -`, message on stdin | plain text (final message) |
+| `gemini` | `gemini` headless, message on stdin | plain text |
+| `ollama` | `ollama run <model>` (default `llama3.2`), message on stdin | plain text |
 | `command` | your command, message on stdin | `text` or `json:<key>` |
+
+In `advice` mode, `claude` runs with `--permission-mode plan` and `codex` with `--sandbox read-only`. Gemini's plan mode switches to auto-approval once the plan is done in headless runs, so hail does not use it: for `gemini`, advice is an instruction, not a sandbox. An `ollama` model has no tools at all, which makes it a cheap, safe second opinion.
 
 Every setting that is not a known key (`bin`, `agent_id`, `session`, `max_turns`...) fills the preset template, so presets stay easy to tweak.
 
@@ -112,13 +117,17 @@ hail log [-n N] [--grep X] recent messages between agents
 hail threads | thread <id> list threads | show one thread
 hail stop | resume <id>    block or reopen a thread
 hail telegram test | watch check the Telegram channel | take commands from it
+hail jobs [agent] [--all]  what agents have scheduled (next run in UTC + local time)
+hail inbox [agent] [--all] what agents delivered since you last looked
+hail inbox read <agent> <id> | clear [agent]
+hail prune --days N        delete journal entries older than N days
 hail list                  configured agents (with skills and cost)
 hail add <name> --preset <p> [--host <alias>] [--command <cmd>] [--set key=value]
 hail doctor                check every agent is reachable
 hail mcp                   MCP server over stdio
 ```
 
-MCP tools: `hail_list`, `hail_ask`, `hail_send`, `hail_status`, `hail_council`, `hail_thread`.
+MCP tools: `hail_list`, `hail_ask`, `hail_send`, `hail_status`, `hail_council`, `hail_thread`, `hail_jobs`, `hail_inbox`, `hail_inbox_read`.
 
 ## Agents talking to each other
 
@@ -162,6 +171,19 @@ hermes = ["claude", "openclaw"]
 hermes = ["openclaw"]
 ```
 
+## Jobs and inbox
+
+Agents that run on a schedule (Hermes cron jobs, for example) keep working while you are away. `hail jobs` lists what each one has planned, with the next run in UTC and in your local time (`--tz Europe/Paris` to pick one). `hail inbox` lists the reports they delivered since you last looked, `hail inbox read <agent> <id>` prints one and marks it read. Both are read-only and never wake the agent, so they cost no tokens.
+
+Hermes works out of the box (hail reads `~/.hermes/cron/` on its machine). Any other agent can join with a `feed_command`: a read-only program that receives `HAIL_FEED_ARGS` (`["jobs"]`, `["inbox"]` or `["read", "<id>"]`) and prints JSON:
+
+```toml
+[agents.mybot]
+preset = "command"
+command = "mybot --stdin"
+feed_command = "mybot-feed"   # prints [{"id", "name", "schedule", "next_run", ...}] or [{"id", "created", "preview"}]
+```
+
 ### Telegram channel
 
 Create a bot with [@BotFather](https://t.me/BotFather), add it as admin of a private group with **Topics** enabled, and put the token in a file (`chmod 600`), never in `agents.toml`:
@@ -176,20 +198,31 @@ topics = true                                  # one topic per thread
 
 Every exchange between agents is posted in its thread's topic, with API keys, tokens and passwords redacted. Run `hail telegram watch` (e.g. as a systemd service) to accept commands from `allowed_users`: `/stop` and `/resume` inside a topic block or reopen that thread, any other text in a topic becomes a note the agents see on their next call, `/ask <agent> <message>` starts a new thread in the background, `/threads` lists recent ones.
 
+## Journal
+
+Every ask, reply, error and refusal goes to `~/.hail/hail.db` (SQLite, WAL mode), with API keys, tokens and passwords masked before they are written. To keep it small, either run `hail prune --days 30` from time to time or let hail do it once a day:
+
+```toml
+[journal]
+retention_days = 90
+```
+
+Pruning deletes old messages, empty threads and finished background tasks; a task that is still running is never touched. A background task whose worker died (reboot, kill) is marked `failed` after six hours instead of blocking new ones.
+
 ## How it works
 
 For a remote agent, hail runs `ssh -o BatchMode=yes <host> sh -c '<script>'` and writes your message to SSH's stdin. On the server the script reads it with `msg=$(cat)` and calls the agent with `"$msg"`. Your text is never pasted into a command line, so quotes, `$`, backticks and accents arrive untouched (there is a test for exactly that). Local presets run the agent directly, without a shell. The `command` preset runs your command through the local shell and sends the message on stdin.
 
 The remote host needs a POSIX `sh` (any Linux or macOS server). On Windows, an agent installed as a `.cmd`/`.bat` shim (npm) cannot safely take the message as an argument, so hail refuses it; use the `claude` preset (stdin), a `command` agent, or run the agent over SSH/WSL.
 
-Calls are synchronous with a per-agent timeout (default 180 s) and a size cap (default 8000 characters, header and history included). Use `hail send` / `hail_send` for longer requests.
+On the server the agent runs under `timeout` (coreutils) with the same limit, so a call that times out does not leave the agent working on its own after hail gave up. Calls are synchronous with a per-agent timeout (default 180 s) and a size cap (default 8000 characters, header and history included). Use `hail send` / `hail_send` for longer requests.
 
 ## Safety
 
 - **Replies are data, not instructions.** Another model wrote them. The MCP tool labels every reply as untrusted, and you should verify facts and open cited URLs yourself: agents do invent sources.
 - **hail_ask is a prompt-injection path.** If an MCP client can call `hail_ask` and the target agent has tools (shell, email, files), whatever text reaches the client can end up as a request to that agent. Only configure agents whose permissions you are comfortable exposing, and prefer read-only agents.
-- hail stores every message in `~/.hail/hail.db` on the machine that makes the call: keep that directory private, and delete it to forget. It posts to a chat only if you configure `[telegram]` (secrets are redacted with patterns, which is a safety net, not a guarantee). OpenClaw runs without `--deliver`.
-- **Advice mode is enforced only where the agent has a read-only switch** (today: Claude Code, `--permission-mode plan`). For Hermes, OpenClaw and `command` agents it is an instruction in the header, not a sandbox: give those agents only the tools you accept them using.
+- hail stores every message in `~/.hail/hail.db` on the machine that makes the call (secrets masked by pattern, which is a safety net): keep that directory private, prune it, or delete it to forget. It posts to a chat only if you configure `[telegram]` (secrets are redacted with patterns, which is a safety net, not a guarantee). OpenClaw runs without `--deliver`.
+- **Advice mode is enforced only where the agent has a read-only switch** (today: Claude Code, `--permission-mode plan`, and Codex, `--sandbox read-only`). For Hermes, OpenClaw, Gemini and `command` agents it is an instruction in the header, not a sandbox: give those agents only the tools you accept them using.
 - Identity: an agent is *verified* when hail exported `HAIL_SELF` to it (or declared it in its MCP config). An MCP caller that only *claims* a name with `from` may ask for advice, never for an action, unless the journal shows it was really asked something in that thread; an unidentified MCP caller is `unknown-agent`, never you. `/ask` from Telegram (allowed users only) runs as you, in action mode.
 - Agents consulting each other multiply the prompt-injection paths: keep the default `advice` mode, grant `[policy.act]` sparingly, and read the journal.
 - For local presets that take the message as an argument (`hermes`, `openclaw`), the message is visible in the local process list while the call runs. Remote messages travel only on the SSH channel.

@@ -1,6 +1,6 @@
 {
   "name": "hail",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Talk to your other AI agents (Hermes, OpenClaw, Claude Code, any CLI agent) locally or over SSH, without copy-paste.",
   "author": { "name": "kerneldottoday" },
   "homepage": "https://github.com/kerneldottoday/hail",

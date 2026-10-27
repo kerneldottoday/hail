@@ -53,6 +53,23 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
             advice_argv=("--permission-mode", "plan"),
             description="Claude Code in print mode (claude -p, prompt on stdin)",
         ),
+        "codex": Preset(
+            argv=("{bin}", "exec", "--skip-git-repo-check", "-"),
+            defaults=MappingProxyType({"bin": "codex"}),
+            advice_argv=("--sandbox", "read-only"),
+            description="OpenAI Codex CLI (codex exec, prompt on stdin)",
+        ),
+        # No advice switch: gemini's plan mode turns into yolo once the plan is done in headless runs.
+        "gemini": Preset(
+            argv=("{bin}",),
+            defaults=MappingProxyType({"bin": "gemini"}),
+            description="Google Gemini CLI (headless, prompt on stdin)",
+        ),
+        "ollama": Preset(
+            argv=("{bin}", "run", "{model}"),
+            defaults=MappingProxyType({"bin": "ollama", "model": "llama3.2"}),
+            description="Local model through Ollama (ollama run <model>), no tools",
+        ),
         "command": Preset(
             argv=(),
             description="Any shell command; the message is sent on stdin",

@@ -89,7 +89,7 @@ def cmd_send(argv: list[str]) -> int:
 def cmd_status(argv: list[str]) -> int:
     if len(argv) != 1:
         raise HailError("usage: hail status <task-id>")
-    task = default_store().get_task(argv[0])
+    task = tasks.status(default_store(), argv[0])
     if task is None:
         raise HailError(f"unknown task '{argv[0]}'")
     print(tasks.describe(task))

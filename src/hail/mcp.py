@@ -154,7 +154,7 @@ def _status(args: dict) -> tuple[str, bool]:
     task_id = args.get("task")
     if not isinstance(task_id, str):
         raise ValueError("'task' must be a string")
-    task = make_app(trust_user=False).store.get_task(task_id)
+    task = tasks.status(make_app(trust_user=False).store, task_id)
     if task is None:
         raise HailError(f"unknown task '{task_id}'")
     return (tasks.describe(task), task.status != "failed")

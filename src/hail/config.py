@@ -43,6 +43,7 @@ RESERVED_NAMES = frozenset(
         "telegram",
         "jobs",
         "inbox",
+        "prune",
     }
 )
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -52,6 +53,7 @@ KNOWN_KEYS = frozenset(
     {"preset", "host", "timeout", "max_chars", "command", "parser", "path", "description", "skills", "cost"}
 )
 COSTS = ("low", "medium", "high")
+JOURNAL_KEYS = frozenset({"retention_days"})
 
 
 class ConfigError(ValueError):
@@ -90,6 +92,7 @@ class Config:
     agents: Mapping[str, Agent]
     policy: Policy
     telegram: Mapping[str, Any] | None
+    retention_days: int | None = None  # [journal]: prune older messages automatically
 
 
 def load_agents(path: Path | None = None) -> dict[str, Agent]:
@@ -110,7 +113,28 @@ def load_config(path: Path | None = None) -> Config:
     if telegram is not None and not isinstance(telegram, dict):
         raise ConfigError(f"{path}: [telegram] must be a table")
     agents = {name: parse_agent(name, raw) for name, raw in table.items()}
-    return Config(agents=MappingProxyType(agents), policy=policy, telegram=telegram)
+    return Config(
+        agents=MappingProxyType(agents),
+        policy=policy,
+        telegram=telegram,
+        retention_days=_retention(path, data.get("journal")),
+    )
+
+
+def _retention(path: Path, raw: Any) -> int | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: [journal] must be a table")
+    unknown = set(raw) - JOURNAL_KEYS
+    if unknown:
+        raise ConfigError(f"{path}: [journal]: unknown key(s) {', '.join(sorted(unknown))}")
+    days = raw.get("retention_days")
+    if days is None:
+        return None
+    if not isinstance(days, int) or isinstance(days, bool) or days <= 0:
+        raise ConfigError(f"{path}: [journal] retention_days must be a positive integer")
+    return days
 
 
 def _read(path: Path) -> dict[str, Any]:

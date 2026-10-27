@@ -18,6 +18,7 @@ from .runner import HailError
 from .store import Store, Task
 
 MAX_ACTIVE = 8  # background tasks submitted or working at once
+STALE_AFTER = 6 * 3600  # a task silent this long has lost its worker
 
 
 class Consults(Protocol):
@@ -25,12 +26,19 @@ class Consults(Protocol):
 
 
 def submit(store: Store, req: Request, thread: str, sender: str) -> tuple[str, str]:
+    store.reap_stale(STALE_AFTER)
     if store.count_active_tasks() >= MAX_ACTIVE:
         raise HailError(f"too many background tasks ({MAX_ACTIVE} running): wait for one to finish")
     task_id = "k-" + secrets.token_hex(4)
     store.create_task(task_id, {**asdict(req), "thread": thread, "sender": sender})
     spawn(task_id)
     return task_id, thread
+
+
+def status(store: Store, task_id: str) -> Task | None:
+    """A task as ``hail status`` shows it, after failing the ones whose worker died."""
+    store.reap_stale(STALE_AFTER)
+    return store.get_task(task_id)
 
 
 def spawn(task_id: str) -> None:
