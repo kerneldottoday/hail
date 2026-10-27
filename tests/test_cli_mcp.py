@@ -127,7 +127,17 @@ def test_mcp_initialize_and_list():
     assert init["protocolVersion"] == "2025-03-26"
     assert rpc("initialize", {"protocolVersion": "1999"})["result"]["protocolVersion"] == "2025-06-18"
     names = [t["name"] for t in rpc("tools/list")["result"]["tools"]]
-    assert names == ["hail_list", "hail_ask", "hail_send", "hail_status", "hail_council", "hail_thread"]
+    assert names == [
+        "hail_list",
+        "hail_ask",
+        "hail_send",
+        "hail_status",
+        "hail_council",
+        "hail_jobs",
+        "hail_inbox",
+        "hail_inbox_read",
+        "hail_thread",
+    ]
     assert rpc("ping")["result"] == {}
 
 

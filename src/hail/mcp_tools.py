@@ -79,6 +79,29 @@ TOOLS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "hail_jobs",
+        "description": "Scheduled jobs of the agents (cron): next run in UTC and local time, last status. Read-only.",
+        "inputSchema": _schema(
+            {"agent": {"type": "string"}, "all": {"type": "boolean", "description": "Include paused jobs"}}, []
+        ),
+    },
+    {
+        "name": "hail_inbox",
+        "description": "Reports the agents delivered (cron outputs) that you have not read yet. Read-only.",
+        "inputSchema": _schema(
+            {"agent": {"type": "string"}, "all": {"type": "boolean", "description": "Include already-read items"}},
+            [],
+        ),
+    },
+    {
+        "name": "hail_inbox_read",
+        "description": "Full text of one inbox item (marks it as read). " + UNTRUSTED_NOTE,
+        "inputSchema": _schema(
+            {"agent": {"type": "string"}, "id": {"type": "string", "description": "Item id from hail_inbox"}},
+            ["agent", "id"],
+        ),
+    },
+    {
         "name": "hail_thread",
         "description": "Read the journal of one thread: who asked whom, replies, refusals and human notes.",
         "inputSchema": _schema({"thread": _THREAD}, ["thread"]),

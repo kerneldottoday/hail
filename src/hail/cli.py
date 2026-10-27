@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from . import __version__, commands
+from . import __version__, commands, jobs_inbox
 from .config import Agent, ConfigError, config_path, load_agents, parse_agent
 from .presets import PRESETS
 from .runner import SSH_OPTIONS, HailError, remote_quote
@@ -90,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         "stop": commands.cmd_stop,
         "resume": lambda a: commands.cmd_stop(a, stopped=False),
         "telegram": commands.cmd_telegram,
+        "jobs": jobs_inbox.cmd_jobs,
+        "inbox": jobs_inbox.cmd_inbox,
         "_task": commands.cmd_task,
     }
     try:
@@ -115,6 +117,9 @@ def usage() -> str:
         "  hail threads | thread <id>  list threads | show one thread\n"
         "  hail stop|resume <thread>   block or reopen a thread\n"
         "  hail telegram test|watch    check the Telegram channel | take commands from it\n"
+        "  hail jobs [agent] [--all]   what agents have scheduled (UTC + local time)\n"
+        "  hail inbox [agent] [--all]  what agents delivered since you last looked\n"
+        "  hail inbox read <agent> <id> | clear [agent]\n"
         "  hail list                   list configured agents\n"
         "  hail init                   create the agents file\n"
         "  hail add <name> --preset <p> [--host <ssh-alias>] [--set key=value]\n"

@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   request TEXT NOT NULL, result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS inbox_seen (
+  agent TEXT NOT NULL, item TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (agent, item)
+);
 """
 MESSAGE_COLUMNS = "id, ts, thread, hop, sender, recipient, kind, mode, text"
 
@@ -257,6 +260,20 @@ class Store:
     def get_meta(self, key: str) -> str | None:
         row = self._one("SELECT value FROM meta WHERE key = ?", (key,))
         return str(row[0]) if row else None
+
+    # inbox ------------------------------------------------------------------
+
+    def mark_seen(self, agent: str, items: list[str]) -> None:
+        now = time.time()
+        with self._db() as db:
+            db.executemany(
+                "INSERT OR IGNORE INTO inbox_seen (agent, item, ts) VALUES (?,?,?)", [(agent, i, now) for i in items]
+            )
+
+    def seen_items(self, agent: str) -> set[str]:
+        with self._db() as db:
+            rows = db.execute("SELECT item FROM inbox_seen WHERE agent = ?", (agent,)).fetchall()
+        return {str(r[0]) for r in rows}
 
     # helpers ----------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 """Minimal MCP server over stdio (newline-delimited JSON-RPC 2.0), no dependencies.
 
-Tools: hail_list, hail_ask, hail_send, hail_status, hail_council, hail_thread
+Tools: hail_list, hail_ask, hail_send, hail_status, hail_council, hail_jobs, hail_inbox, hail_inbox_read, hail_thread
 (definitions in ``mcp_tools``).
 """
 
@@ -11,12 +11,13 @@ import sys
 from collections.abc import Callable
 from typing import Any, TextIO
 
-from . import __version__, tasks
+from . import __version__, feeds, jobs_inbox, tasks
 from .app import make_app
 from .config import ConfigError
 from .hub import Request
 from .mcp_tools import ETIQUETTE, TOOLS, UNTRUSTED_NOTE
 from .runner import HailError
+from .store import default_store
 
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
@@ -183,7 +184,38 @@ def _thread(args: dict) -> tuple[str, bool]:
     return ("\n".join(lines), True)
 
 
+def _opt_str(args: dict, key: str) -> str | None:
+    value = args.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"'{key}' must be a string")
+    return value or None
+
+
+def _jobs(args: dict) -> tuple[str, bool]:
+    agents = jobs_inbox.feed_agents(_opt_str(args, "agent"))
+    rows, errors = jobs_inbox.collect_jobs(agents, bool(args.get("all")))
+    text = jobs_inbox.render_jobs(rows, feeds.resolve_tz(None))
+    return ("\n".join([text, *(f"error: {e}" for e in errors)]), not errors or bool(rows))
+
+
+def _inbox(args: dict) -> tuple[str, bool]:
+    agents = jobs_inbox.feed_agents(_opt_str(args, "agent"))
+    rows, errors = jobs_inbox.collect_inbox(agents, default_store(), bool(args.get("all")))
+    text = jobs_inbox.render_inbox(rows, feeds.resolve_tz(None))
+    return ("\n".join([text, *(f"error: {e}" for e in errors)]), not errors or bool(rows))
+
+
+def _inbox_read(args: dict) -> tuple[str, bool]:
+    agent, item = _opt_str(args, "agent"), _opt_str(args, "id")
+    if not agent or not item:
+        raise ValueError("'agent' and 'id' are required")
+    return (jobs_inbox.read_item(agent, item, default_store()), True)
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict], tuple[str, bool]]] = {
+    "hail_jobs": _jobs,
+    "hail_inbox": _inbox,
+    "hail_inbox_read": _inbox_read,
     "hail_list": _list,
     "hail_ask": _ask,
     "hail_send": _send,
