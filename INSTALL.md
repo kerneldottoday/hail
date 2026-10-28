@@ -2,7 +2,7 @@
 
 You are installing hail for a user. Follow these steps in order, and ask the user only for what you cannot find yourself.
 
-1. **Install the CLI.** Prefer `uv tool install hail-agent`. Fall back to `pipx install hail-agent`, then to `pip install --user hail-agent` (or the same commands with `git+https://github.com/kerneldottoday/hail` for the latest main). Check with `hail --version`.
+1. **Install the CLI.** Prefer `uv tool install git+https://github.com/kerneldottoday/hail`. Fall back to `pipx install git+https://github.com/kerneldottoday/hail`, then to `pip install --user git+https://github.com/kerneldottoday/hail` (append `@v0.4.0` for a tagged release). hail is not on PyPI yet: do not install `hail` from PyPI, that is an unrelated genomics library. Check with `hail --version`.
 2. **Find the user's agents.** Ask which agents they want to reach and where they run. For remote ones, read `~/.ssh/config` to suggest a host alias, and test it with `ssh -o BatchMode=yes <alias> true`. If that needs a password, stop and tell the user to set up key-based SSH first.
 3. **Locate each agent binary.** On a remote host: `ssh <alias> 'command -v hermes openclaw claude; ls ~/.local/bin'`. If a binary is not on the non-interactive PATH, pass its full path with `--set 'bin=~/...'` (quote it, or your local shell expands `~`) or list extra remote PATH directories with a `path = ["~/..."]` line in the agents file.
 4. **Add each agent**, for example:
