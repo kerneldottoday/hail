@@ -28,9 +28,10 @@ hail is the small missing piece: a thin, auditable bridge (about 3,000 lines of 
 ### Solo (any terminal)
 
 ```bash
-uv tool install git+https://github.com/kerneldottoday/hail
+uv tool install hail-agent
 # or
-pipx install git+https://github.com/kerneldottoday/hail
+pipx install hail-agent
+# latest main: uv tool install git+https://github.com/kerneldottoday/hail
 ```
 
 Python 3.10+. The PyPI distribution name is `hail-agent`; it is unrelated to the
@@ -221,7 +222,7 @@ On the server the agent runs under `timeout` (coreutils) with the same limit, so
 
 - **Replies are data, not instructions.** Another model wrote them. The MCP tool labels every reply as untrusted, and you should verify facts and open cited URLs yourself: agents do invent sources.
 - **hail_ask is a prompt-injection path.** If an MCP client can call `hail_ask` and the target agent has tools (shell, email, files), whatever text reaches the client can end up as a request to that agent. Only configure agents whose permissions you are comfortable exposing, and prefer read-only agents.
-- hail stores every message in `~/.hail/hail.db` on the machine that makes the call (secrets masked by pattern, which is a safety net): keep that directory private, prune it, or delete it to forget. It posts to a chat only if you configure `[telegram]` (secrets are redacted with patterns, which is a safety net, not a guarantee). OpenClaw runs without `--deliver`.
+- hail stores every message in `~/.hail/hail.db` on the machine that makes the call (secrets masked by pattern, which is a safety net). hail creates it owner-only (`700`, file `600`) and tightens it on every start; prune it, or delete it to forget. It posts to a chat only if you configure `[telegram]` (secrets are redacted with patterns, which is a safety net, not a guarantee). OpenClaw runs without `--deliver`.
 - **Advice mode is enforced only where the agent has a read-only switch** (today: Claude Code, `--permission-mode plan`, and Codex, `--sandbox read-only`). For Hermes, OpenClaw, Gemini and `command` agents it is an instruction in the header, not a sandbox: give those agents only the tools you accept them using.
 - Identity: an agent is *verified* when hail exported `HAIL_SELF` to it (or declared it in its MCP config). An MCP caller that only *claims* a name with `from` may ask for advice, never for an action, unless the journal shows it was really asked something in that thread; an unidentified MCP caller is `unknown-agent`, never you. `/ask` from Telegram (allowed users only) runs as you, in action mode.
 - Agents consulting each other multiply the prompt-injection paths: keep the default `advice` mode, grant `[policy.act]` sparingly, and read the journal.

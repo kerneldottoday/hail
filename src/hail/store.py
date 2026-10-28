@@ -94,6 +94,15 @@ def hail_home() -> Path:
     return Path(env).expanduser() if env else Path.home() / ".hail"
 
 
+def _make_private(path: Path) -> None:
+    """The journal holds every exchange between agents: owner-only, also when it already exists."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))  # SQLite gives its -wal/-shm files the same mode
+    if os.name == "posix":
+        os.chmod(path.parent, 0o700)
+        os.chmod(path, 0o600)
+
+
 def default_store() -> Store:
     return Store(hail_home() / "hail.db")
 
@@ -101,7 +110,7 @@ def default_store() -> Store:
 class Store:
     def __init__(self, path: Path) -> None:
         self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _make_private(path)
         with self._db() as db:
             try:
                 db.execute("PRAGMA journal_mode=WAL")  # readers never wait for the writer; persistent once set
