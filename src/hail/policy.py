@@ -4,7 +4,8 @@ Defaults: any agent may ask any other for *advice*; nobody but the user may ask
 an agent to *act* unless ``[policy.act]`` says so. Chains stop after
 ``max_hops``, a thread after ``max_calls_per_thread`` asks, and the whole
 machine after ``rate_per_minute`` asks (circuit breaker against loops that
-lose their thread id).
+lose their thread id). With ``strict_advice``, an agent may only consult agents
+that enforce advice mode themselves (read-only flags or agent), not just by prompt.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from typing import Any
 
 from .envelope import DEFAULT_MAX_HOPS, MODES, USER
 
-KNOWN_KEYS = frozenset({"max_hops", "max_calls_per_thread", "rate_per_minute", "talk", "act"})
+KNOWN_KEYS = frozenset({"max_hops", "max_calls_per_thread", "rate_per_minute", "talk", "act", "strict_advice"})
 EMPTY: Mapping[str, frozenset[str]] = MappingProxyType({})
 
 
@@ -31,6 +32,7 @@ class Policy:
     rate_per_minute: int = 30
     talk: Mapping[str, frozenset[str]] = field(default_factory=lambda: EMPTY)
     act: Mapping[str, frozenset[str]] = field(default_factory=lambda: EMPTY)
+    strict_advice: bool = False  # agents only consult agents that enforce advice themselves
 
     def check(self, sender: str, target: str, mode: str) -> str | None:
         """Return why ``sender`` may not reach ``target`` in ``mode``, or None if allowed."""
@@ -63,7 +65,15 @@ def parse_policy(raw: Any) -> Policy:
         rate_per_minute=_positive(raw, "rate_per_minute", defaults.rate_per_minute),
         talk=_lists(raw, "talk"),
         act=_lists(raw, "act"),
+        strict_advice=_flag(raw, "strict_advice"),
     )
+
+
+def _flag(raw: dict[str, Any], key: str) -> bool:
+    value = raw.get(key, False)
+    if not isinstance(value, bool):
+        raise PolicyError(f"[policy] {key} must be true or false")
+    return value
 
 
 def _positive(raw: dict[str, Any], key: str, default: int) -> int:

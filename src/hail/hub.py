@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from . import envelope
 from .config import COSTS, Agent, Config
 from .envelope import USER, Context, Event
-from .runner import HailError, ask
+from .runner import HailError, advice_enforced, ask
 from .store import Store
 
 Notifier = Callable[[Event], None]
@@ -165,7 +165,10 @@ class Hub:
         candidates = [
             a
             for a in self.config.agents.values()
-            if wanted in a.skills and a.name != sender and self.config.policy.check(sender, a.name, mode) is None
+            if wanted in a.skills
+            and a.name != sender
+            and self.config.policy.check(sender, a.name, mode) is None
+            and self._strict(sender, a.name, mode) is None
         ]
         if not candidates:
             known = sorted({s for a in self.config.agents.values() for s in a.skills})
@@ -183,6 +186,18 @@ class Hub:
         if req.skill:
             return self.route(req.skill, sender, mode)
         raise HailError("name an agent or a skill")
+
+    def _strict(self, sender: str, recipient: str, mode: str) -> str | None:
+        """Why [policy] strict_advice refuses this advice call, or None."""
+        agent = self.config.agents.get(recipient)
+        if mode != "advice" or sender == USER or not self.config.policy.strict_advice:
+            return None
+        if agent is None or advice_enforced(agent):
+            return None
+        return (
+            f"'{recipient}' cannot enforce advice mode (read-only) and [policy] strict_advice is on; "
+            "give it a read-only variant (advice_command, advice_agent_id) or ask the user"
+        )
 
     def _base_hop(self, thread: str, sender: str) -> int:
         if sender == USER:
@@ -203,7 +218,9 @@ class Hub:
                 "so it may ask for advice, not for an action"
             )
         else:
-            reason = policy.check(ctx.sender, ctx.recipient, ctx.mode)
+            reason = policy.check(ctx.sender, ctx.recipient, ctx.mode) or self._strict(
+                ctx.sender, ctx.recipient, ctx.mode
+            )
         if reason:
             self._log(ctx, "refused", reason)
             raise Refused(reason)

@@ -14,7 +14,7 @@ import sys
 from . import __version__, commands, jobs_inbox
 from .config import Agent, ConfigError, config_path, load_agents, parse_agent
 from .presets import PRESETS
-from .runner import SSH_OPTIONS, HailError, remote_quote
+from .runner import SSH_OPTIONS, HailError, advice_enforced, remote_quote
 from .store import default_store
 
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -46,6 +46,7 @@ TEMPLATE = """\
 # [agents.anything]
 # preset = "command"
 # command = "my-agent --stdin"   # receives the message on stdin
+# advice_command = "my-agent --stdin --read-only"   # optional, used in advice mode
 
 # Agent-to-agent guard rails (defaults shown). Agents may ask each other for advice;
 # only the agents listed under [policy.act] may ask another one to act.
@@ -53,6 +54,7 @@ TEMPLATE = """\
 # max_hops = 3
 # max_calls_per_thread = 12
 # rate_per_minute = 30
+# strict_advice = false        # true: agents only consult agents that enforce read-only advice
 # [policy.talk]
 # hermes = ["reviewer", "openclaw"]
 # [policy.act]
@@ -144,7 +146,8 @@ def cmd_list(_argv: list[str]) -> int:
     for agent in agents.values():
         where = agent.host or "local"
         card = f" [{', '.join(agent.skills)} · {agent.cost}]" if agent.skills else ""
-        print(f"{agent.name:<16} {agent.preset:<9} {where:<16} {agent.description}{card}")
+        loose = "" if advice_enforced(agent) else "  (advice by prompt only)"
+        print(f"{agent.name:<16} {agent.preset:<9} {where:<16} {agent.description}{card}{loose}")
     return 0
 
 

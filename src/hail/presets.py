@@ -13,6 +13,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+# Hermes toolsets that only read or answer; advice_toolsets must stay inside this list.
+HERMES_READ_ONLY_TOOLSETS = frozenset(
+    {"web", "session_search", "vision", "video", "x_search", "stt", "clarify", "hail"}
+)
+
 
 @dataclass(frozen=True)
 class Preset:
@@ -21,6 +26,9 @@ class Preset:
     defaults: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     description: str = ""
     advice_argv: tuple[str, ...] = ()  # appended in advice mode (read-only answers)
+    # advice mode reads these settings instead, when the agent's config has them (e.g. a read-only agent id)
+    advice_swap: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    no_tools: bool = False  # nothing to restrict: advice is the only thing it can do
 
 
 PRESETS: Mapping[str, Preset] = MappingProxyType(
@@ -28,7 +36,11 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
         "hermes": Preset(
             argv=("{bin}", "chat", "-q", "{message}", "-Q", "--max-turns", "{max_turns}"),
             parser="hermes",
-            defaults=MappingProxyType({"bin": "hermes", "max_turns": "8"}),
+            # advice: only toolsets that read (no terminal, file, code, browser, cron, delegation...)
+            defaults=MappingProxyType(
+                {"bin": "hermes", "max_turns": "8", "advice_toolsets": "web,session_search,vision,hail"}
+            ),
+            advice_argv=("-t", "{advice_toolsets}"),
             description="Nous Research Hermes Agent (hermes chat -q)",
         ),
         "openclaw": Preset(
@@ -45,6 +57,7 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
             ),
             parser="json:finalAssistantVisibleText",
             defaults=MappingProxyType({"bin": "openclaw", "agent_id": "main", "session": "hail"}),
+            advice_swap=MappingProxyType({"agent_id": "advice_agent_id"}),
             description="OpenClaw agent (openclaw agent --json), isolated 'hail' session",
         ),
         "claude": Preset(
@@ -68,6 +81,7 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
         "ollama": Preset(
             argv=("{bin}", "run", "{model}"),
             defaults=MappingProxyType({"bin": "ollama", "model": "llama3.2"}),
+            no_tools=True,
             description="Local model through Ollama (ollama run <model>), no tools",
         ),
         "command": Preset(

@@ -18,7 +18,7 @@ else:  # pragma: no cover - exercised only on 3.10
 
 from . import parsers
 from .policy import Policy, PolicyError, parse_policy
-from .presets import get_preset
+from .presets import HERMES_READ_ONLY_TOOLSETS, get_preset
 
 DEFAULT_TIMEOUT = 180
 DEFAULT_MAX_CHARS = 8000
@@ -53,6 +53,7 @@ KNOWN_KEYS = frozenset(
     {"preset", "host", "timeout", "max_chars", "command", "parser", "path", "description", "skills", "cost"}
 )
 COSTS = ("low", "medium", "high")
+ADVICE_KEYS = ("advice_command", "advice_agent_id", "advice_toolsets")  # read-only variants
 JOURNAL_KEYS = frozenset({"retention_days"})
 
 
@@ -170,7 +171,7 @@ def parse_agent(name: str, raw: Any) -> Agent:
     path = raw.get("path", [])
     if not isinstance(path, list) or not all(isinstance(p, str) for p in path):
         raise ConfigError(f"agent '{name}': 'path' must be a list of strings")
-    variables = {**preset.defaults, **_extra_vars(raw)}
+    variables = {**preset.defaults, **_extra_vars(raw), **_advice_settings(name, preset_name, raw, command)}
     return Agent(
         name=name,
         preset=preset_name,
@@ -185,6 +186,37 @@ def parse_agent(name: str, raw: Any) -> Agent:
         skills=_skills(name, raw.get("skills", [])),
         cost=_cost(name, raw.get("cost", "medium")),
     )
+
+
+def _advice_settings(name: str, preset_name: str, raw: dict[str, Any], command: str | None) -> dict[str, str]:
+    """The read-only variants, checked to really be narrower than the full agent."""
+    found: dict[str, str] = {}
+    for key in ADVICE_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"agent '{name}': '{key}' must be a non-empty string")
+        found[key] = value.strip()
+    if "advice_toolsets" in found:
+        found["advice_toolsets"] = _read_only_toolsets(name, found["advice_toolsets"])
+    full = {
+        "advice_agent_id": str(raw.get("agent_id", get_preset(preset_name).defaults.get("agent_id", ""))),
+        "advice_command": (command or "").strip(),
+    }
+    for key, value in full.items():
+        if found.get(key) and found[key] == value:
+            raise ConfigError(f"agent '{name}': '{key}' must name a read-only variant, not the agent itself")
+    return found
+
+
+def _read_only_toolsets(name: str, value: str) -> str:
+    items = [t.strip() for t in value.split(",")]
+    bad = [t for t in items if t not in HERMES_READ_ONLY_TOOLSETS]
+    if bad:
+        allowed = ", ".join(sorted(HERMES_READ_ONLY_TOOLSETS))
+        raise ConfigError(f"agent '{name}': 'advice_toolsets' may only list read-only toolsets ({allowed})")
+    return ",".join(items)
 
 
 def _skills(name: str, value: Any) -> tuple[str, ...]:

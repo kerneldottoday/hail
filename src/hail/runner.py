@@ -17,6 +17,7 @@ SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
 MESSAGE = "{message}"
 CMD_SHIM_SUFFIXES = (".cmd", ".bat")
 KILL_GRACE = 5  # seconds between TERM and KILL on the server
+ADVICE_COMMAND = "advice_command"  # preset 'command': the read-only variant run in advice mode
 
 
 class HailError(RuntimeError):
@@ -59,7 +60,7 @@ def build(
         return Invocation(argv=ssh_argv, stdin=message)
     local_env = _local_env(agent, extra, drop_env)
     if agent.preset == "command":
-        return Invocation(argv=agent.command or "", stdin=message, shell=True, env=local_env)
+        return Invocation(argv=_command(agent, mode), stdin=message, shell=True, env=local_env)
     template = _template(agent, mode)
     argv = tuple(_fill(t, agent, message) for t in template)
     program = os.path.expanduser(argv[0])
@@ -77,7 +78,25 @@ def build(
 
 def _template(agent: Agent, mode: str) -> tuple[str, ...]:
     preset = get_preset(agent.preset)
-    return preset.argv + (preset.advice_argv if mode == "advice" else ())
+    if mode != "advice":
+        return preset.argv
+    swaps = {f"{{{key}}}": f"{{{alt}}}" for key, alt in preset.advice_swap.items() if agent.variables.get(alt)}
+    return tuple(swaps.get(t, t) for t in preset.argv) + preset.advice_argv
+
+
+def _command(agent: Agent, mode: str) -> str:
+    advice = agent.variables.get(ADVICE_COMMAND) if mode == "advice" else None
+    return advice or agent.command or ""
+
+
+def advice_enforced(agent: Agent) -> bool:
+    """True when advice mode is enforced by the agent itself (flags, a read-only agent), not just asked for."""
+    preset = get_preset(agent.preset)
+    if preset.advice_argv or preset.no_tools:
+        return True
+    if agent.preset == "command":
+        return bool(agent.variables.get(ADVICE_COMMAND))
+    return any(agent.variables.get(alt) for alt in preset.advice_swap.values())
 
 
 def _local_env(agent: Agent, extra: dict[str, str], drop: Sequence[str] = ()) -> dict[str, str] | None:
@@ -103,7 +122,7 @@ def _remote_script(agent: Agent, extra: dict[str, str], mode: str) -> str:
     # Probe rather than look it up: an old BusyBox timeout without -k would refuse to start the agent.
     prefix += f"timeout -k 1 1 true >/dev/null 2>&1 && set -- timeout -k {KILL_GRACE} {agent.timeout}; "
     if agent.preset == "command":
-        return f'{prefix}exec "$@" sh -c {shlex.quote(agent.command or "")}'
+        return f'{prefix}exec "$@" sh -c {shlex.quote(_command(agent, mode))}'
     tokens = _template(agent, mode)
     rendered = " ".join('"$msg"' if t == MESSAGE else remote_quote(_fill(t, agent, "")) for t in tokens)
     if MESSAGE not in tokens:
