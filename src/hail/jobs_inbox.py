@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
 from . import feeds
@@ -18,6 +18,8 @@ from .store import Store, default_store
 UNTRUSTED = "[untrusted: written by an agent, verify before relying on it]"
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 FAR = datetime(9999, 1, 1, tzinfo=timezone.utc)
+MARK_KEY = "inbox_mark:"
+CLOCK_SKEW = timedelta(minutes=10)
 ESCAPES = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]")  # CSI, OSC, others
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # keeps \t and \n
 
@@ -141,10 +143,12 @@ def collect_inbox(agents: Iterable[Agent], store: Store, show_all: bool) -> tupl
     results, errors = _gather(agents, ["inbox"])
     rows = []
     for agent, data in results:
-        seen = store.seen_items(agent.name)
+        seen, mark = store.seen_items(agent.name), read_mark(agent.name, store)
         for item in data:
             if isinstance(item, dict) and isinstance(item.get("id"), str):
-                rows.append({**item, "agent": agent.name, "seen": item["id"] in seen})
+                created = feeds.parse_time(item.get("created"))
+                old = mark is not None and created is not None and created <= mark
+                rows.append({**item, "agent": agent.name, "seen": old or item["id"] in seen})
     if not show_all:
         rows = [r for r in rows if not r["seen"]]
     rows.sort(key=lambda r: feeds.parse_time(r.get("created")) or EPOCH, reverse=True)
@@ -177,14 +181,23 @@ def read_item(agent_name: str, item_id: str, store: Store) -> str:
     return f"{UNTRUSTED}\n--- {agent.name} {item_id} ---\n{clean(data['text'][: feeds.MAX_READ_CHARS])}"
 
 
+def read_mark(agent_name: str, store: Store) -> datetime | None:
+    """Everything an agent delivered up to this time was cleared, even if its feed no longer lists it."""
+    return feeds.parse_time(store.get_meta(MARK_KEY + agent_name))
+
+
 def clear(agent_name: str | None, store: Store) -> tuple[int, list[str]]:
-    rows, errors = collect_inbox(feed_agents(agent_name), store, show_all=False)
-    by_agent: dict[str, list[str]] = {}
-    for r in rows:
-        by_agent.setdefault(r["agent"], []).append(r["id"])
-    for agent, items in by_agent.items():
-        store.mark_seen(agent, items)
-    return len(rows), errors
+    rows, errors = collect_inbox(feed_agents(agent_name), store, show_all=True)
+    new = [r for r in rows if not r["seen"]]
+    horizon = datetime.now(timezone.utc) + CLOCK_SKEW  # a future-dated report must not hide what comes next
+    for agent in {r["agent"] for r in rows}:
+        store.mark_seen(agent, [r["id"] for r in new if r["agent"] == agent])
+        times = [t for r in rows if r["agent"] == agent and (t := feeds.parse_time(r.get("created"))) and t <= horizon]
+        old = read_mark(agent, store)
+        latest = max([*times, *([old] if old else [])], default=None)
+        if latest is not None:
+            store.set_meta(MARK_KEY + agent, latest.isoformat())
+    return len(new), errors
 
 
 def cmd_inbox(argv: list[str]) -> int:

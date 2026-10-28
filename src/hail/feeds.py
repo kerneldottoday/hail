@@ -42,6 +42,9 @@ def out(value, code=0):
 home = os.path.expanduser(os.environ.get("HERMES_HOME") or "~/.hermes")
 cron = os.path.join(home, "cron")
 outputs = os.path.realpath(os.path.join(cron, "output"))
+box_env = os.environ.get("HAIL_MAILBOX")
+mailbox = os.path.realpath(os.path.expanduser(box_env)) if box_env else None
+MAIL = "mailbox"
 try:
     args = json.loads(os.environ.get("HAIL_FEED_ARGS") or "[]")
 except ValueError:
@@ -65,8 +68,8 @@ def schedule_text(job):
     return str(job.get("schedule_display") or sched or "")
 
 
-def iso_mtime(path):
-    return datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat()
+def iso_time(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
 
 
 def item_job(rel):
@@ -74,36 +77,65 @@ def item_job(rel):
     return head if "/" in rel else head.split("_")[0]
 
 
-def list_items(names):
+def stamp(found, rel):
+    path = item_path(rel)  # resolved: a symlink pointing out of the folder is dropped, as in read
+    if path is None or os.path.basename(path).startswith(".") or not os.path.isfile(path):
+        return  # a FIFO or socket would block open()
+    try:
+        st = os.stat(path)
+    except OSError:
+        return  # removed by a cleanup meanwhile
+    # ctime moves when the file lands (cp -p, rsync -t and mv keep an older mtime)
+    found.append((max(st.st_mtime, st.st_ctime), rel, path))
+
+
+def cron_outputs():
     found = []
     for root, _dirs, files in os.walk(outputs):
         for name in files:
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, outputs).replace(os.sep, "/")
-            if rel.count("/") > 1 or name.startswith(".") or not os.path.isfile(path):
-                continue  # a FIFO or socket would block open()
-            try:
-                found.append((os.path.getmtime(path), rel, path))
-            except OSError:
-                continue  # removed by a cron cleanup meanwhile
-    found.sort(reverse=True)
+            rel = os.path.relpath(os.path.join(root, name), outputs).replace(os.sep, "/")
+            if rel.count("/") <= 1:
+                stamp(found, rel)
+    return sorted(found, reverse=True)[:MAX_ITEMS]
+
+
+def mailbox_notes():
+    found = []
+    if mailbox and os.path.isdir(mailbox):
+        for name in os.listdir(mailbox):
+            stamp(found, MAIL + "/" + name)  # top level only
+    return sorted(found, reverse=True)[:MAX_ITEMS]  # its own quota: busy crons cannot push notes out
+
+
+def list_items(names):
     items = []
-    for _mtime, rel, path in found[:MAX_ITEMS]:
+    for arrived, rel, path in sorted(cron_outputs() + mailbox_notes(), reverse=True):
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 preview = " ".join(fh.read(PREVIEW * 2).split())[:PREVIEW]
-            created, size = iso_mtime(path), os.path.getsize(path)
+            size = os.path.getsize(path)
         except OSError:
             continue
-        job = item_job(rel)
-        items.append({"id": rel, "job": job, "job_name": names.get(job, ""), "created": created,
-                      "size": size, "preview": preview})
+        job = MAIL if rel.startswith(MAIL + "/") else item_job(rel)
+        name = MAIL if job == MAIL else names.get(job, "")
+        items.append({"id": rel, "job": job, "job_name": name, "created": iso_time(arrived), "size": size,
+                      "preview": preview})
     return items
 
 
-def read_item(rel):
+def item_path(rel):
+    if mailbox and rel.startswith(MAIL + "/"):
+        name = rel[len(MAIL) + 1:]
+        path = os.path.realpath(os.path.join(mailbox, name))
+        ok = "/" not in name and not name.startswith(".") and os.path.dirname(path) == mailbox
+        return path if ok else None
     path = os.path.realpath(os.path.join(outputs, rel))
-    if not path.startswith(outputs + os.sep) or not os.path.isfile(path):
+    return path if path.startswith(outputs + os.sep) else None
+
+
+def read_item(rel):
+    path = item_path(rel)
+    if path is None or not os.path.isfile(path):
         out({"error": "unknown item: " + rel}, 2)
     with open(path, encoding="utf-8", errors="replace") as fh:
         out({"id": rel, "text": fh.read(MAX_READ)})
@@ -116,7 +148,7 @@ if command == "jobs":
           "last_run": j.get("last_run_at"), "last_status": j.get("last_status")} for j in load_jobs()])
 elif command == "inbox":
     names = {str(j.get("id", "")): str(j.get("name", "")) for j in load_jobs()}
-    out(list_items(names) if os.path.isdir(outputs) else [])
+    out(list_items(names))
 elif command == "read" and len(args) == 2:
     read_item(str(args[1]))
 else:
@@ -124,6 +156,9 @@ else:
 """
 
 BUILTIN_FEEDS = {"hermes": HERMES_FEED}
+# agent settings handed to a built-in feed as paths on the agent's machine (``~`` allowed)
+PATH_VARS = {"hermes_home": "HERMES_HOME", "mailbox": "HAIL_MAILBOX"}
+PATH_KEYS = frozenset(PATH_VARS.values())
 
 
 def has_feed(agent: Agent) -> bool:
@@ -138,14 +173,13 @@ def check_item_id(item: str) -> str:
 
 def invocation(agent: Agent, args: list[str]) -> Invocation:
     env = {"HAIL_FEED_ARGS": json.dumps(args)}
-    home = agent.variables.get("hermes_home")
-    if home and agent.preset in BUILTIN_FEEDS:
-        env["HERMES_HOME"] = home
+    if agent.preset in BUILTIN_FEEDS:
+        env.update({key: agent.variables[var] for var, key in PATH_VARS.items() if agent.variables.get(var)})
     command = agent.variables.get("feed_command")
     script = None if command else BUILTIN_FEEDS.get(agent.preset)
     if agent.host is not None:
         exports = "export " + " ".join(
-            f"{k}={remote_quote(v) if k == 'HERMES_HOME' else shlex.quote(v)}" for k, v in env.items()
+            f"{k}={remote_quote(v) if k in PATH_KEYS else shlex.quote(v)}" for k, v in env.items()
         )
         if agent.path:
             exports += "; export PATH=" + ":".join(remote_quote(p) for p in agent.path) + ':"$PATH"'
@@ -153,7 +187,7 @@ def invocation(agent: Agent, args: list[str]) -> Invocation:
         remote = f"{exports}; {body}"
         argv = ("ssh", *SSH_OPTIONS, "--", agent.host, "sh -c " + shlex.quote(remote))
         return Invocation(argv=argv, stdin=script)
-    local = {**os.environ, **{k: os.path.expanduser(v) if k == "HERMES_HOME" else v for k, v in env.items()}}
+    local = {**os.environ, **{k: os.path.expanduser(v) if k in PATH_KEYS else v for k, v in env.items()}}
     if agent.path:
         local["PATH"] = os.pathsep.join([*(os.path.expanduser(p) for p in agent.path), local.get("PATH", "")])
     if command:

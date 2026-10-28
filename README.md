@@ -176,7 +176,18 @@ hermes = ["openclaw"]
 
 Agents that run on a schedule (Hermes cron jobs, for example) keep working while you are away. `hail jobs` lists what each one has planned, with the next run in UTC and in your local time (`--tz Europe/Paris` to pick one). `hail inbox` lists the reports they delivered since you last looked, `hail inbox read <agent> <id>` prints one and marks it read. Both are read-only and never wake the agent, so they cost no tokens.
 
-Hermes works out of the box (hail reads `~/.hermes/cron/` on its machine). Any other agent can join with a `feed_command`: a read-only program that receives `HAIL_FEED_ARGS` (`["jobs"]`, `["inbox"]` or `["read", "<id>"]`) and prints JSON:
+Hermes works out of the box (hail reads `~/.hermes/cron/` on its machine). Work it finishes outside a cron job (a chat, a task resumed by hand) can reach you too: give it a mailbox folder, tell it to drop a note there when it is done, and the note shows up in `hail inbox` as `mailbox/<file>` (top-level files only, dotfiles ignored):
+
+```toml
+[agents.hermes]
+preset = "hermes"
+host = "my-vps"
+mailbox = "~/shared/from-agents/hermes"   # on the agent's machine
+```
+
+`hail inbox clear` remembers the newest report it cleared, so older reports that an agent's cleanup lets back into the list never come back as new.
+
+Any other agent can join with a `feed_command`: a read-only program that receives `HAIL_FEED_ARGS` (`["jobs"]`, `["inbox"]` or `["read", "<id>"]`) and prints JSON:
 
 ```toml
 [agents.mybot]
