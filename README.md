@@ -30,13 +30,13 @@ hail is the small missing piece: a thin, auditable bridge (about 3,000 lines of 
 ### Solo (any terminal)
 
 ```bash
-uv tool install git+https://github.com/kerneldottoday/hail
+uv tool install hail-agent
 # or
-pipx install git+https://github.com/kerneldottoday/hail
-# a tagged release: uv tool install git+https://github.com/kerneldottoday/hail@v0.4.0
+pipx install hail-agent
+# latest main: uv tool install git+https://github.com/kerneldottoday/hail
 ```
 
-Python 3.10+. A PyPI release (`hail-agent`) is coming; until then install from GitHub as above. The distribution name `hail-agent` is unrelated to the
+Python 3.10+. The distribution name `hail-agent` is unrelated to the
 [Hail](https://hail.is) genomics library, which also imports as `hail`. Install with
 `uv tool` or `pipx` (isolated environments) so the two never collide. Then:
 
