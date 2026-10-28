@@ -1,5 +1,7 @@
 # hail
 
+![hail in 45 seconds: one command to reach any agent, agents that consult each other, read-only advice mode, one inbox](docs/demo.gif)
+
 **Talk to your AI agents from anywhere, and let them talk to each other.** One command to message Hermes, OpenClaw, Claude Code, Codex, Gemini CLI, a local Ollama model or any CLI agent, on this machine or on a server over SSH, from your terminal or from any MCP client. When an agent is stuck, it can consult another one itself, with loop guards, a journal and an optional Telegram channel to watch it happen.
 
 ```bash
