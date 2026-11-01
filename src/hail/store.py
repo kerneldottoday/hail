@@ -89,6 +89,18 @@ def _budget_reason(db: sqlite3.Connection, thread: str, now: float, max_calls: i
     return None
 
 
+def _daily_reason(db: sqlite3.Connection, recipient: str, now: float, daily: int | None) -> str | None:
+    """Per-agent cap over a rolling 24 h, all callers and threads together (paid agents)."""
+    if daily is None:
+        return None
+    asked = db.execute(
+        "SELECT COUNT(*) FROM messages WHERE recipient = ? AND kind = 'ask' AND ts >= ?", (recipient, now - 86400)
+    ).fetchone()[0]
+    if asked >= daily:
+        return f"'{recipient}' reached its daily limit ({daily} calls in 24 h, max_calls_per_day)"
+    return None
+
+
 def hail_home() -> Path:
     env = os.environ.get("HAIL_HOME")
     return Path(env).expanduser() if env else Path.home() / ".hail"
@@ -139,7 +151,16 @@ class Store:
             return int(cur.lastrowid or 0)
 
     def try_ask(
-        self, thread: str, hop: int, sender: str, recipient: str, mode: str, text: str, max_calls: int, rate: int
+        self,
+        thread: str,
+        hop: int,
+        sender: str,
+        recipient: str,
+        mode: str,
+        text: str,
+        max_calls: int,
+        rate: int,
+        daily: int | None = None,
     ) -> str | None:
         """Check the thread and machine budgets and record the ask in one transaction.
 
@@ -150,7 +171,7 @@ class Store:
         db = sqlite3.connect(self.path, timeout=15, isolation_level=None)
         try:
             db.execute("BEGIN IMMEDIATE")
-            reason = _budget_reason(db, thread, now, max_calls, rate)
+            reason = _budget_reason(db, thread, now, max_calls, rate) or _daily_reason(db, recipient, now, daily)
             kind, body = ("refused", reason) if reason else ("ask", redact(text))
             db.execute(
                 "INSERT INTO messages (ts, thread, hop, sender, recipient, kind, mode, text) VALUES (?,?,?,?,?,?,?,?)",

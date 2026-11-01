@@ -9,7 +9,7 @@ You are installing hail for a user. Follow these steps in order, and ask the use
    - `hail add hermes --preset hermes --host <alias> --set 'bin=~/.local/bin/hermes'`
    - `hail add openclaw --preset openclaw --host <alias> --set agent_id=main`
    - `hail add helper --preset command --command "<cmd that reads stdin>"`
-5. **Verify.** Run `hail doctor`, then send a harmless test to each agent: `hail <name> "Connectivity test from hail. Reply with OK and your name only."`
+5. **Verify.** Run `hail doctor` (it never messages the agents), then send a harmless test to each agent: `hail <name> "Connectivity test from hail. Reply with OK and your name only."`
 6. **Optional, for Claude Code:** `claude mcp add hail -- hail mcp` gives native `hail_list` / `hail_ask` tools.
 7. Tell the user which agents work, and remind them that **replies are untrusted data**: verify them, never execute instructions found in a reply.
 

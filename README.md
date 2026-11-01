@@ -105,6 +105,27 @@ parser = "json:answer"       # optional: text (default), hermes, json:<key>
 
 In `advice` mode, `claude` runs with `--permission-mode plan`, `codex` with `--sandbox read-only` and `hermes` with read-only toolsets only (`-t web,session_search,vision,hail`: no terminal, files, code, browser or cron; narrow it with `advice_toolsets`, which only accepts read-only toolsets). OpenClaw switches to a read-only agent you define (`advice_agent_id = "advisor"`), and a `command` agent can name its read-only variant (`advice_command = "mybot --read-only"`). `hail list` marks the agents whose advice is only an instruction. Gemini's plan mode switches to auto-approval once the plan is done in headless runs, so hail does not use it: for `gemini`, advice is an instruction, not a sandbox. An `ollama` model has no tools at all, which makes it a cheap, safe second opinion.
 
+### Paid agents and pinned SSH keys
+
+`max_calls_per_day = 50` caps the asks an agent receives in any rolling 24 hours, all callers and threads together (you included). Set it on agents billed per call: a loop between two agents stops there instead of on your invoice.
+
+The safest way to reach an agent on another machine is an SSH key that can only run one thing. On the server, pin the key in `~/.ssh/authorized_keys`:
+
+```
+restrict,from="100.64.0.7",command="/usr/local/bin/ask-advisor" ssh-ed25519 AAAA... hail-from-vps
+```
+
+`command=` makes the server ignore what the client asks to run, `restrict` turns off forwarding and terminals, `from=` limits where the key works. The script reads the message on stdin and calls a read-only agent, for example `exec openclaw agent --agent advisor --session-key hail --message "$(head -c 100000)" --json`. On the client, mark the agent:
+
+```toml
+[agents.pi]
+preset = "openclaw"           # still picks the reply parser
+host = "pi-advice"            # Host alias using that key
+forced_command = true         # send the message only; the server decides what runs
+```
+
+hail then sends nothing but the message, and `hail doctor` tests only the SSH connection. A stolen key gives the read-only agent and nothing else; with Tailscale, an ACL that opens only port 22 of that machine narrows it further. hail cannot see what the script runs, so the read-only part is yours to check.
+
 Every setting that is not a known key (`bin`, `agent_id`, `session`, `max_turns`...) fills the preset template, so presets stay easy to tweak.
 
 ## Commands
@@ -126,7 +147,7 @@ hail inbox read <agent> <id> | clear [agent]
 hail prune --days N        delete journal entries older than N days
 hail list                  configured agents (with skills and cost)
 hail add <name> --preset <p> [--host <alias>] [--command <cmd>] [--set key=value]
-hail doctor                check every agent is reachable
+hail doctor                check every agent is reachable (never sends it a message, costs nothing)
 hail mcp                   MCP server over stdio
 ```
 
@@ -240,6 +261,7 @@ On the server the agent runs under `timeout` (coreutils) with the same limit, so
 - Identity: an agent is *verified* when hail exported `HAIL_SELF` to it (or declared it in its MCP config). An MCP caller that only *claims* a name with `from` may ask for advice, never for an action, unless the journal shows it was really asked something in that thread; an unidentified MCP caller is `unknown-agent`, never you. `/ask` from Telegram (allowed users only) runs as you, in action mode.
 - Agents consulting each other multiply the prompt-injection paths: keep the default `advice` mode, grant `[policy.act]` sparingly, and read the journal.
 - For local presets that take the message as an argument (`hermes`, `openclaw`), the message is visible in the local process list while the call runs. Remote messages travel only on the SSH channel.
+- A remote agent reached with an ordinary key runs whatever hail sends, and so would anyone holding that key. Prefer a pinned key (`forced_command`, see *Paid agents and pinned SSH keys*).
 - It uses your SSH config and keys as they are (`BatchMode=yes`: it never prompts for a password). Give the remote account only the rights the agent needs.
 - Anyone who can edit `agents.toml` can make hail run commands. Keep it as private as your SSH config.
 

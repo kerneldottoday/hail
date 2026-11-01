@@ -50,7 +50,20 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9_.@:\[\]-]+$")
 LOCAL_HOSTS = frozenset({"", "local", "localhost"})
 KNOWN_KEYS = frozenset(
-    {"preset", "host", "timeout", "max_chars", "command", "parser", "path", "description", "skills", "cost"}
+    {
+        "preset",
+        "host",
+        "timeout",
+        "max_chars",
+        "command",
+        "parser",
+        "path",
+        "description",
+        "skills",
+        "cost",
+        "forced_command",
+        "max_calls_per_day",
+    }
 )
 COSTS = ("low", "medium", "high")
 ADVICE_KEYS = ("advice_command", "advice_agent_id", "advice_toolsets")  # read-only variants
@@ -75,6 +88,8 @@ class Agent:
     variables: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     skills: tuple[str, ...] = ()
     cost: str = "medium"
+    forced_command: bool = False  # the server pins the command (authorized_keys command=): send the message only
+    max_calls_per_day: int | None = None  # asks to this agent in any rolling 24 h, all callers together
 
     @property
     def is_remote(self) -> bool:
@@ -185,6 +200,8 @@ def parse_agent(name: str, raw: Any) -> Agent:
         variables=MappingProxyType(variables),
         skills=_skills(name, raw.get("skills", [])),
         cost=_cost(name, raw.get("cost", "medium")),
+        forced_command=_forced(name, raw, host),
+        max_calls_per_day=_positive_int(name, raw, "max_calls_per_day", 0) if "max_calls_per_day" in raw else None,
     )
 
 
@@ -223,6 +240,15 @@ def _skills(name: str, value: Any) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(s, str) and s.strip() for s in value):
         raise ConfigError(f"agent '{name}': 'skills' must be a list of words")
     return tuple(s.strip().lower() for s in value)
+
+
+def _forced(name: str, raw: dict[str, Any], host: str | None) -> bool:
+    value = raw.get("forced_command", False)
+    if not isinstance(value, bool):
+        raise ConfigError(f"agent '{name}': 'forced_command' must be true or false")
+    if value and host is None:
+        raise ConfigError(f"agent '{name}': 'forced_command' needs a 'host' (it describes the SSH server)")
+    return value
 
 
 def _cost(name: str, value: Any) -> str:

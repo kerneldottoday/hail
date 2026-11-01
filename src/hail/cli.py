@@ -37,6 +37,12 @@ TEMPLATE = """\
 # preset = "openclaw"
 # host = "my-vps"
 # agent_id = "main"
+# max_calls_per_day = 50       # paid agent: at most 50 asks in any 24 h, all callers together
+
+# [agents.pi]
+# preset = "openclaw"
+# host = "pi-advice"           # an SSH key pinned with authorized_keys command="..." on the server
+# forced_command = true        # send the message only; the server decides what runs
 
 # [agents.reviewer]
 # preset = "claude"
@@ -139,6 +145,9 @@ def usage() -> str:
     )
 
 
+SSH_FAILED = 255  # ssh's own exit code when it could not connect or authenticate
+
+
 def cmd_list(_argv: list[str]) -> int:
     agents = load_agents()
     if not agents:
@@ -219,6 +228,9 @@ def cmd_mcp(_argv: list[str]) -> int:
 
 
 def check(agent: Agent) -> tuple[bool, str]:
+    """Probe an agent without ever sending it a message (no model call, no cost)."""
+    if agent.host is not None and agent.forced_command:
+        return _check_forced(agent.host)
     try:
         program = _program(agent)
     except ValueError as exc:
@@ -230,22 +242,41 @@ def check(agent: Agent) -> tuple[bool, str]:
     script = f"command -v {remote_quote(program)}"
     if agent.path:
         script = "export PATH=" + ":".join(remote_quote(p) for p in agent.path) + ':"$PATH"; ' + script
-    try:
-        proc = subprocess.run(
-            ["ssh", *SSH_OPTIONS, "--", agent.host, "sh -c " + shlex.quote(script)],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return (False, f"ssh {agent.host}: timeout")
-    except OSError as exc:
-        return (False, f"cannot run ssh: {exc}")
+    proc, error = _ssh(agent.host, "sh -c " + shlex.quote(script))
+    if proc is None:
+        return (False, error)
     out = proc.stdout.decode("utf-8", "replace").strip()
     if proc.returncode == 0 and out:
         return (True, f"{agent.host}: {out}")
     err = proc.stderr.decode("utf-8", "replace").strip()[-200:]
     return (False, f"{agent.host}: '{program}' not found {err}".strip())
+
+
+def _check_forced(host: str) -> tuple[bool, str]:
+    """The server runs its own command and gets an empty message: only SSH itself is tested (255 = no connection)."""
+    proc, error = _ssh(host, "true")
+    if proc is None:
+        return (False, error)
+    if proc.returncode == SSH_FAILED:
+        err = proc.stderr.decode("utf-8", "replace").strip()[-200:]
+        return (False, f"{host}: ssh failed {err}".strip())
+    return (True, f"{host}: ssh ok (forced command, agent not probed)")
+
+
+def _ssh(host: str, remote: str) -> tuple[subprocess.CompletedProcess[bytes] | None, str]:
+    try:
+        proc = subprocess.run(
+            ["ssh", *SSH_OPTIONS, "--", host, remote],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return (None, f"ssh {host}: timeout")
+    except OSError as exc:
+        return (None, f"cannot run ssh: {exc}")
+    return (proc, "")
 
 
 def _program(agent: Agent) -> str:

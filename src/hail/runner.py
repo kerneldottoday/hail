@@ -54,6 +54,10 @@ def build(
     """``env`` is exported to the agent (hail context); ``mode`` advice adds the preset's read-only flags;
     ``drop_env`` names variables (secrets such as the Telegram token) the agent must not inherit."""
     extra = dict(env or {})
+    if agent.host is not None and agent.forced_command:
+        # The server ignores the command line and runs its own (authorized_keys command=), so send nothing
+        # but the message. "true" keeps a misconfigured server harmless: it runs, prints nothing, hail errors.
+        return Invocation(argv=("ssh", *SSH_OPTIONS, "--", agent.host, "true"), stdin=message)
     if agent.host is not None:
         script = _remote_script(agent, extra, mode)
         ssh_argv: tuple[str, ...] = ("ssh", *SSH_OPTIONS, "--", agent.host, "sh -c " + shlex.quote(script))
@@ -171,6 +175,8 @@ def ask(
         proc = subprocess.run(
             inv.argv,
             input=inv.stdin.encode("utf-8") if inv.stdin is not None else None,
+            # no message on stdin: give an empty one, never hail's own (the MCP stream under ``hail mcp``)
+            stdin=subprocess.DEVNULL if inv.stdin is None else None,
             capture_output=True,
             timeout=agent.timeout,
             shell=inv.shell,

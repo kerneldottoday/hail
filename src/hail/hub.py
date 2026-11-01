@@ -233,12 +233,17 @@ class Hub:
             message,
             policy.max_calls_per_thread,
             policy.rate_per_minute,
+            self._daily(ctx.recipient),
         )
         kind = "refused" if reason else "ask"
         event = Event(ctx.thread, ctx.hop, ctx.sender, ctx.recipient, kind, ctx.mode, reason or message, ctx.max_hops)
         self._emit(event)
         if reason:
             raise Refused(reason)
+
+    def _daily(self, name: str) -> int | None:
+        agent = self.config.agents.get(name)
+        return agent.max_calls_per_day if agent else None
 
     def _safe(self, message: str, name: str, thread: str, mode: str | None) -> Outcome:
         try:
