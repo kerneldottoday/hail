@@ -11,7 +11,7 @@ import sys
 from collections.abc import Callable
 from typing import Any, TextIO
 
-from . import __version__, feeds, jobs_inbox, tasks
+from . import __version__, access, feeds, jobs_inbox, tasks
 from .app import make_app
 from .config import ConfigError
 from .hub import Request
@@ -84,6 +84,7 @@ def _tools_call(params: dict) -> dict:
     if handler is None:
         raise ValueError(f"unknown tool: {name}")
     try:
+        access.enforce_tool(str(name))  # over MCP the caller is always an agent
         text, ok = handler(args)
     except (ConfigError, HailError) as exc:
         return _text(f"hail error: {exc}", is_error=True)
@@ -114,7 +115,7 @@ def _request(args: dict) -> Request:
         return value or None
 
     message = args.get("message")
-    if not isinstance(message, str):
+    if not isinstance(message, str):  # 'ref' is read by hail_send only
         raise ValueError("'message' must be a string")
     return Request(
         message=message,
@@ -146,8 +147,14 @@ def _ask(args: dict) -> tuple[str, bool]:
 def _send(args: dict) -> tuple[str, bool]:
     req = _request(args)
     app = make_app(trust_user=False)
-    task_id, thread = tasks.submit(app.store, req, app.hub.thread_for(req.thread), app.hub.sender_for(req.sender))
-    return (f"task {task_id} submitted (thread {thread}); poll it with hail_status", True)
+    ref = _opt_str(args, "ref")
+    sub = tasks.submit(app.store, req, app.hub.thread_for(req.thread), app.hub.sender_for(req.sender), ref=ref)
+    if sub.reused:
+        return (
+            f"task {sub.id} already submitted with ref '{ref}' (thread {sub.thread}); poll it with hail_status",
+            True,
+        )
+    return (f"task {sub.id} submitted (thread {sub.thread}); poll it with hail_status", True)
 
 
 def _status(args: dict) -> tuple[str, bool]:

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .errors import LaterReason
+from .errors import LaterReason, UsageError
 from .redact import redact
 
 SCHEMA = """
@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, created REAL NOT NULL, updated REAL NOT NULL, status TEXT NOT NULL,
   request TEXT NOT NULL, result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS task_refs (
+  ref TEXT PRIMARY KEY, task TEXT NOT NULL, digest TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS inbox_seen (
@@ -75,6 +78,20 @@ class Task:
     error: str
     created: float
     updated: float
+    ref: str | None = None  # the --ref that names it, if any
+
+
+def _ref_hit(db: sqlite3.Connection, ref: str, digest: str) -> str | None:
+    """The live task already named ``ref`` (a failed one may be retried), or None."""
+    row = db.execute(
+        "SELECT r.task, r.digest, t.status FROM task_refs r LEFT JOIN tasks t ON t.id = r.task WHERE r.ref = ?",
+        (ref,),
+    ).fetchone()
+    if row is None or row[2] is None:
+        return None
+    if row[1] != digest:
+        raise UsageError(f"ref '{ref}' already names another request: use a new ref")
+    return None if row[2] == "failed" else str(row[0])
 
 
 def _budget_reason(db: sqlite3.Connection, thread: str, now: float, max_calls: int, rate: int) -> str | None:
@@ -277,13 +294,34 @@ class Store:
 
     # tasks ------------------------------------------------------------------
 
-    def create_task(self, task_id: str, request: dict[str, Any]) -> None:
+    def create_task(self, task_id: str, request: dict[str, Any], ref: str | None = None, digest: str = "") -> str:
+        """Record a task and return its id: the existing one if ``ref`` already names a live task."""
         now = time.time()
+        db = sqlite3.connect(self.path, timeout=15, isolation_level=None)
+        try:
+            db.execute("BEGIN IMMEDIATE")  # two sends with the same ref cannot both create a task
+            existing = _ref_hit(db, ref, digest) if ref else None
+            if existing is None:
+                db.execute(
+                    "INSERT INTO tasks (id, created, updated, status, request) VALUES (?,?,?,?,?)",
+                    (task_id, now, now, "submitted", json.dumps(request, ensure_ascii=False)),
+                )
+                if ref:
+                    db.execute(
+                        "INSERT OR REPLACE INTO task_refs (ref, task, digest) VALUES (?,?,?)", (ref, task_id, digest)
+                    )
+            db.execute("COMMIT")
+        except BaseException:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        finally:
+            db.close()
+        return existing or task_id
+
+    def task_for_ref(self, ref: str, digest: str) -> str | None:
         with self._db() as db:
-            db.execute(
-                "INSERT INTO tasks (id, created, updated, status, request) VALUES (?,?,?,?,?)",
-                (task_id, now, now, "submitted", json.dumps(request, ensure_ascii=False)),
-            )
+            return _ref_hit(db, ref, digest)
 
     def update_task(self, task_id: str, status: str, result: str = "", error: str = "") -> None:
         with self._db() as db:
@@ -292,13 +330,24 @@ class Store:
                 (status, redact(result), redact(error), time.time(), task_id),
             )
 
+    def claim_task(self, task_id: str) -> bool:
+        """Move a submitted task to 'working'; False if something else already did."""
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE tasks SET status = 'working', updated = ? WHERE id = ? AND status = 'submitted'",
+                (time.time(), task_id),
+            )
+            return cur.rowcount == 1
+
     def get_task(self, task_id: str) -> Task | None:
         row = self._one(
-            "SELECT id, status, request, result, error, created, updated FROM tasks WHERE id = ?", (task_id,)
+            "SELECT t.id, t.status, t.request, t.result, t.error, t.created, t.updated, r.ref "
+            "FROM tasks t LEFT JOIN task_refs r ON r.task = t.id WHERE t.id = ?",
+            (task_id,),
         )
         if not row:
             return None
-        return Task(row[0], row[1], json.loads(row[2]), row[3], row[4], row[5], row[6])
+        return Task(row[0], row[1], json.loads(row[2]), row[3], row[4], row[5], row[6], row[7])
 
     # retention ----------------------------------------------------------------
 
@@ -314,6 +363,7 @@ class Store:
                 (cutoff,),
             )
             db.execute(f"DELETE FROM tasks WHERE updated < ? AND status NOT IN {ACTIVE}", (cutoff,))
+            db.execute("DELETE FROM task_refs WHERE task NOT IN (SELECT id FROM tasks)")
         return removed
 
     def auto_prune(self, retention_days: int | None) -> int:

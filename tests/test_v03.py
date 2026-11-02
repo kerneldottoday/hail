@@ -44,7 +44,7 @@ def test_submit_reaps_dead_workers_before_counting(store, monkeypatch):
     for i in range(tasks.MAX_ACTIVE):
         store.create_task(f"k-dead{i}", {"agent": "a"})
     _age(store, "tasks", "updated", tasks.STALE_AFTER + 60)
-    task_id, _thread = tasks.submit(store, Request(message="hi", agent="a"), "t-1", "user")
+    task_id = tasks.submit(store, Request(message="hi", agent="a"), "t-1", "user").id
     assert store.get_task(task_id).status == "submitted"
     assert store.count_active_tasks() == 1
 

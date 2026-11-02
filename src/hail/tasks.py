@@ -6,33 +6,70 @@ environment, so the hail identity (thread, hop, sender) is preserved.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import secrets
 import subprocess
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
-from .errors import NotFound, Temporary
+from .errors import AgentUnusable, NotFound, Temporary, UsageError
 from .hub import Outcome, Request
 from .store import Store, Task
 
 MAX_ACTIVE = 8  # background tasks submitted or working at once
 STALE_AFTER = 6 * 3600  # a task silent this long has lost its worker
+REF_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+
+
+@dataclass(frozen=True)
+class Submitted:
+    id: str
+    thread: str
+    ref: str | None = None
+    reused: bool = False  # the ref already named this task: nothing new was started
 
 
 class Consults(Protocol):
     def consult(self, req: Request) -> Outcome: ...
 
 
-def submit(store: Store, req: Request, thread: str, sender: str) -> tuple[str, str]:
+def submit(store: Store, req: Request, thread: str, sender: str, ref: str | None = None) -> Submitted:
+    """Start a background ask. With ``ref``, sending the same request again returns the same task."""
+    if ref is not None and not REF_RE.fullmatch(ref):
+        raise UsageError(f"invalid ref '{ref[:80]}' (1-64 letters, digits, '.', '_', ':' or '-')")
     store.reap_stale(STALE_AFTER)
+    digest = _digest(req, sender)
+    existing = store.task_for_ref(ref, digest) if ref else None
+    if existing:
+        return _again(store, existing, ref)
     if store.count_active_tasks() >= MAX_ACTIVE:
         raise Temporary(f"too many background tasks ({MAX_ACTIVE} running): wait for one to finish")
-    task_id = "k-" + secrets.token_hex(4)
-    store.create_task(task_id, {**asdict(req), "thread": thread, "sender": sender})
-    spawn(task_id)
-    return task_id, thread
+    new_id = "k-" + secrets.token_hex(4)
+    task_id = store.create_task(new_id, {**asdict(req), "thread": thread, "sender": sender}, ref=ref, digest=digest)
+    if task_id != new_id:  # another send with the same ref won the race
+        return _again(store, task_id, ref)
+    try:
+        spawn(task_id)
+    except OSError as exc:  # fail it, so the same ref can try again instead of waiting for a dead task
+        store.update_task(task_id, "failed", error=f"could not start the worker: {exc}")
+        raise AgentUnusable(f"could not start the background worker: {exc}") from None
+    return Submitted(task_id, thread, ref)
+
+
+def _again(store: Store, task_id: str, ref: str | None) -> Submitted:
+    task = store.get_task(task_id)
+    thread = str(task.request.get("thread")) if task else ""
+    return Submitted(task_id, thread, ref, reused=True)
+
+
+def _digest(req: Request, sender: str) -> str:
+    """What makes two sends 'the same request' for a ref (the thread may be new each time)."""
+    key = [req.agent, req.skill, req.message.strip(), req.mode, sender]
+    return hashlib.sha256(json.dumps(key, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def status(store: Store, task_id: str) -> Task | None:
@@ -63,7 +100,8 @@ def run(hub: Consults, store: Store, task_id: str) -> None:
     task = store.get_task(task_id)
     if task is None:
         raise NotFound(f"unknown task '{task_id}'")
-    store.update_task(task_id, "working")
+    if not store.claim_task(task_id):
+        return  # already started or finished: a task runs once, however often its worker is called
     try:
         req = Request(**task.request)
     except TypeError as exc:

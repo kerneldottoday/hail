@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from . import __version__, commands, guide, jobs_inbox, render
+from . import __version__, access, commands, guide, jobs_inbox, render
 from .config import Agent, ConfigError, config_path, load_agents, parse_agent
 from .errors import EXIT, HailError, UsageError
 from .presets import PRESETS
@@ -62,6 +62,7 @@ TEMPLATE = """\
 # max_calls_per_thread = 12
 # rate_per_minute = 30
 # strict_advice = false        # true: agents only consult agents that enforce read-only advice
+# cli_access = "all"           # what an agent running hail may do: all | read | none (refused = exit 7)
 # [policy.talk]
 # hermes = ["reviewer", "openclaw"]
 # [policy.act]
@@ -112,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         "_task": commands.cmd_task,
     }
     try:
+        access.enforce_cli(argv, frozenset(table))
         if argv[0] in table:
             return table[argv[0]](argv[1:])
         return commands.cmd_ask(argv[0], argv[1:])
@@ -138,6 +140,7 @@ def usage() -> str:
         "      [--json] [--thread T] [--mode advice|action] [--from NAME]\n"
         '  hail ask --skill S "msg"    ask the cheapest agent that has skill S\n'
         '  hail send <agent> "msg"     run in the background, prints a task id\n'
+        "      [--ref R]               same R again returns the same task (safe retries)\n"
         "  hail status <task>          state and result of a background task\n"
         '  hail council --agents a,b [--synth c] "question"\n'
         "                              ask several agents, then one synthesizes\n"

@@ -17,7 +17,10 @@ from typing import Any
 
 from .envelope import DEFAULT_MAX_HOPS, MODES, USER
 
-KNOWN_KEYS = frozenset({"max_hops", "max_calls_per_thread", "rate_per_minute", "talk", "act", "strict_advice"})
+KNOWN_KEYS = frozenset(
+    {"max_hops", "max_calls_per_thread", "rate_per_minute", "talk", "act", "strict_advice", "cli_access"}
+)
+CLI_ACCESS = ("all", "read", "none")
 EMPTY: Mapping[str, frozenset[str]] = MappingProxyType({})
 
 
@@ -33,6 +36,7 @@ class Policy:
     talk: Mapping[str, frozenset[str]] = field(default_factory=lambda: EMPTY)
     act: Mapping[str, frozenset[str]] = field(default_factory=lambda: EMPTY)
     strict_advice: bool = False  # agents only consult agents that enforce advice themselves
+    cli_access: str = "all"  # what an agent running hail may do: all | read | none (see access.py)
 
     def check(self, sender: str, target: str, mode: str) -> str | None:
         """Return why ``sender`` may not reach ``target`` in ``mode``, or None if allowed."""
@@ -66,7 +70,15 @@ def parse_policy(raw: Any) -> Policy:
         talk=_lists(raw, "talk"),
         act=_lists(raw, "act"),
         strict_advice=_flag(raw, "strict_advice"),
+        cli_access=_choice(raw, "cli_access", CLI_ACCESS),
     )
+
+
+def _choice(raw: dict[str, Any], key: str, allowed: tuple[str, ...]) -> str:
+    value = raw.get(key, allowed[0])
+    if value not in allowed:
+        raise PolicyError(f"[policy] {key} must be one of {', '.join(allowed)}")
+    return str(value)
 
 
 def _flag(raw: dict[str, Any], key: str) -> bool:

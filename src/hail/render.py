@@ -84,6 +84,7 @@ def task_row(task: Task) -> dict[str, Any]:
             "agent": req.get("agent"),
             "skill": req.get("skill"),
             "thread": req.get("thread"),
+            "ref": task.ref,
             "created": iso(task.created),
             "updated": iso(task.updated),
             "result": task.result,

@@ -32,6 +32,13 @@ _TARGET = {
 }
 
 
+_REF = {
+    "type": "string",
+    "description": "Your own id for this request (1-64 letters, digits, . _ : -): sending again with the same "
+    "ref returns the same task instead of starting it twice",
+}
+
+
 def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
 
@@ -53,9 +60,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "hail_send",
         "description": (
-            "Like hail_ask but returns a task id at once (for long requests); poll it with hail_status. " + ETIQUETTE
+            "Like hail_ask but returns a task id at once (for long requests); poll it with hail_status. "
+            "Pass a ref to make retries safe. " + ETIQUETTE
         ),
-        "inputSchema": _schema(_TARGET, ["message"]),
+        "inputSchema": _schema({**_TARGET, "ref": _REF}, ["message"]),
     },
     {
         "name": "hail_status",

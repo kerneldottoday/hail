@@ -23,7 +23,8 @@ def store(tmp_path):
 def test_submit_records_and_spawns(store, monkeypatch):
     spawned = []
     monkeypatch.setattr(tasks, "spawn", spawned.append)
-    task_id, thread = tasks.submit(store, Request(message="long job", agent="claude"), thread="t-1", sender="user")
+    sub = tasks.submit(store, Request(message="long job", agent="claude"), thread="t-1", sender="user")
+    task_id, thread = sub.id, sub.thread
     assert spawned == [task_id] and thread == "t-1"
     task = store.get_task(task_id)
     assert task.status == "submitted" and task.request["message"] == "long job"
@@ -175,7 +176,9 @@ def update(uid, text, user=5, topic=None):
 def test_poll_handles_stop_note_and_ask(store, monkeypatch):
     store.set_topic("t-1", 77)
     submitted = []
-    monkeypatch.setattr(telegram, "submit_task", lambda st, req, **kw: submitted.append(req) or ("k-1", "t-new"))
+    monkeypatch.setattr(
+        telegram, "submit_task", lambda st, req, **kw: submitted.append(req) or tasks.Submitted("k-1", "t-new")
+    )
     api = FakeApi(
         [
             update(1, "/stop", topic=77),

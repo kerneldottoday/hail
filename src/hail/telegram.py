@@ -199,10 +199,8 @@ class Telegram:
         agent, message = parts[1], parts[2]
         if self.agents and agent not in self.agents:
             return f"unknown agent '{agent}' (configured: {', '.join(sorted(self.agents))})"
-        task_id, thread = submit_task(
-            self.store, Request(message=message, agent=agent), thread=new_thread_id(), sender=USER
-        )
-        return f"📨 task {task_id} sent to {agent} (thread {thread})"
+        sub = submit_task(self.store, Request(message=message, agent=agent), thread=new_thread_id(), sender=USER)
+        return f"📨 task {sub.id} sent to {agent} (thread {sub.thread})"
 
     def _threads_text(self) -> str:
         rows = self.store.threads(10)

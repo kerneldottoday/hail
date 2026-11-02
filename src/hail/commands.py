@@ -15,7 +15,7 @@ from .hub import CouncilResult, Outcome, Request
 from .store import Message, default_store
 from .telegram import Telegram, TelegramError
 
-VALUE_FLAGS = ("--thread", "--mode", "--skill", "--from", "--hop", "--agents", "--synth", "-n", "--grep")
+VALUE_FLAGS = ("--thread", "--mode", "--skill", "--from", "--hop", "--agents", "--synth", "-n", "--grep", "--ref")
 BOOL_FLAGS = ("--json",)
 
 
@@ -82,11 +82,16 @@ def cmd_send(argv: list[str]) -> int:
     parsed = parse(argv[1:] if agent else argv)
     app = make_app()
     req = _request(agent, parsed)
-    task_id, thread = tasks.submit(app.store, req, app.hub.thread_for(req.thread), app.hub.sender_for(req.sender))
+    ref = parsed.flags.get("--ref")
+    sub = tasks.submit(app.store, req, app.hub.thread_for(req.thread), app.hub.sender_for(req.sender), ref=ref)
+    task = app.store.get_task(sub.id) if sub.reused else None
+    status = task.status if task else "submitted"
     if "--json" in parsed.flags:
-        print(render.dumps({"id": task_id, "thread": thread, "status": "submitted"}))
+        row = {"id": sub.id, "thread": sub.thread, "status": status, "ref": sub.ref, "reused": sub.reused}
+        print(render.dumps(render.compact(row)))
     else:
-        print(f"{task_id} (thread {thread}) - check with: hail status {task_id}")
+        again = f" - ref {ref} already sent, {status}" if sub.reused else ""
+        print(f"{sub.id} (thread {sub.thread}){again} - check with: hail status {sub.id}")
     return 0
 
 
