@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .errors import LaterReason
 from .redact import redact
 
 SCHEMA = """
@@ -85,7 +86,7 @@ def _budget_reason(db: sqlite3.Connection, thread: str, now: float, max_calls: i
         return f"thread budget used ({max_calls} calls)"
     recent = db.execute("SELECT COUNT(*) FROM messages WHERE kind = 'ask' AND ts >= ?", (now - 60,)).fetchone()[0]
     if recent >= rate:
-        return f"circuit breaker: more than {rate} calls in the last minute"
+        return LaterReason(f"circuit breaker: more than {rate} calls in the last minute")
     return None
 
 
@@ -97,7 +98,7 @@ def _daily_reason(db: sqlite3.Connection, recipient: str, now: float, daily: int
         "SELECT COUNT(*) FROM messages WHERE recipient = ? AND kind = 'ask' AND ts >= ?", (recipient, now - 86400)
     ).fetchone()[0]
     if asked >= daily:
-        return f"'{recipient}' reached its daily limit ({daily} calls in 24 h, max_calls_per_day)"
+        return LaterReason(f"'{recipient}' reached its daily limit ({daily} calls in 24 h, max_calls_per_day)")
     return None
 
 

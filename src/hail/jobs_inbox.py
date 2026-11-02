@@ -12,7 +12,7 @@ from typing import Any
 
 from . import feeds
 from .config import Agent, load_config
-from .runner import HailError
+from .errors import HailError, NotFound, UsageError
 from .store import Store, default_store
 
 UNTRUSTED = "[untrusted: written by an agent, verify before relying on it]"
@@ -48,10 +48,10 @@ def parse_options(argv: list[str]) -> Options:
             flags[word] = True
         elif word == "--tz":
             if not rest:
-                raise HailError("--tz needs a value (e.g. Europe/Paris)")
+                raise UsageError("--tz needs a value (e.g. Europe/Paris)")
             tz = rest.pop(0)
         elif word.startswith("--"):
-            raise HailError(f"unknown option {word}")
+            raise UsageError(f"unknown option {word}")
         else:
             words.append(word)
     return Options(tuple(words), flags["--all"], flags["--json"], tz)
@@ -63,7 +63,7 @@ def feed_agents(name: str | None = None) -> list[Agent]:
         return [a for a in agents.values() if feeds.has_feed(a)]
     agent = agents.get(name)
     if agent is None or not feeds.has_feed(agent):
-        raise HailError(f"'{name}' has no feed (built in for hermes; others: set feed_command)")
+        raise NotFound(f"'{name}' has no feed (built in for hermes; others: set feed_command)")
     return [agent]
 
 
@@ -206,7 +206,7 @@ def cmd_inbox(argv: list[str]) -> int:
     words = opts.words
     if words and words[0] == "read":
         if len(words) != 3:
-            raise HailError("usage: hail inbox read <agent> <id>")
+            raise UsageError("usage: hail inbox read <agent> <id>")
         print(read_item(words[1], words[2], store))
         return 0
     if words and words[0] == "clear":

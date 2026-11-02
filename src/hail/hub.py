@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from . import envelope
 from .config import COSTS, Agent, Config
 from .envelope import USER, Context, Event
-from .runner import HailError, advice_enforced, ask
+from .errors import HailError, NotFound, Refused, Throttled, UsageError
+from .runner import advice_enforced, ask
 from .store import Store
 
 Notifier = Callable[[Event], None]
@@ -31,12 +32,8 @@ def _declared_hop(hop: int | None) -> int:
     if hop is None:
         return 0
     if not isinstance(hop, int) or isinstance(hop, bool) or not 0 <= hop <= 100:
-        raise HailError("'hop' must be a number between 0 and 100")
+        raise UsageError("'hop' must be a number between 0 and 100")
     return hop
-
-
-class Refused(HailError):
-    """The call was blocked by a guard rail (hops, budget, policy, stop)."""
 
 
 @dataclass(frozen=True)
@@ -57,6 +54,7 @@ class Outcome:
     agent: str
     text: str
     ok: bool
+    exit_code: int = 0  # set when hail itself failed before or instead of the agent (council answers)
 
 
 @dataclass(frozen=True)
@@ -92,7 +90,7 @@ class Hub:
             return self.caller.name, True
         if explicit and explicit != USER:
             if not envelope.AGENT_RE.match(explicit):
-                raise HailError(f"invalid sender name '{explicit}'")
+                raise UsageError(f"invalid sender name '{explicit}'")
             return explicit, False
         return (USER, True) if self.trust_user else (ANONYMOUS, False)
 
@@ -102,13 +100,13 @@ class Hub:
     def thread_for(self, explicit: str | None) -> str:
         if explicit:
             if not envelope.valid_thread(explicit):
-                raise HailError(f"invalid thread id '{explicit}' (letters, digits, - and _ only)")
+                raise UsageError(f"invalid thread id '{explicit}' (letters, digits, - and _ only)")
             return explicit
         return self.caller.thread or envelope.new_thread_id()
 
     def consult(self, req: Request) -> Outcome:
         if not req.message.strip():
-            raise HailError("empty message")
+            raise UsageError("empty message")
         sender, verified = self.identify(req.sender)
         thread = self.thread_for(req.thread)
         if not verified and sender != ANONYMOUS:
@@ -141,7 +139,7 @@ class Hub:
         """Ask the same question to several agents in parallel, then optionally have one synthesize."""
         unique = tuple(dict.fromkeys(names))
         if not MIN_COUNCIL <= len(unique) <= MAX_COUNCIL:
-            raise HailError(f"a council needs two to {MAX_COUNCIL} different agents")
+            raise UsageError(f"a council needs two to {MAX_COUNCIL} different agents")
         sender = self.sender_for(None)
         thread_id = self.thread_for(thread)
         header = Event(thread_id, 0, sender, ", ".join(unique), "council", mode or "advice", question)
@@ -172,7 +170,7 @@ class Hub:
         ]
         if not candidates:
             known = sorted({s for a in self.config.agents.values() for s in a.skills})
-            raise HailError(f"no agent with skill '{wanted}' is available (skills: {', '.join(known) or 'none'})")
+            raise NotFound(f"no agent with skill '{wanted}' is available (skills: {', '.join(known) or 'none'})")
         return min(candidates, key=lambda a: (COSTS.index(a.cost), a.name))
 
     # internals ----------------------------------------------------------------
@@ -181,11 +179,11 @@ class Hub:
         if req.agent:
             agents = self.config.agents
             if req.agent not in agents:
-                raise HailError(f"unknown agent '{req.agent}' (configured: {', '.join(agents) or 'none'})")
+                raise NotFound(f"unknown agent '{req.agent}' (configured: {', '.join(agents) or 'none'})")
             return agents[req.agent]
         if req.skill:
             return self.route(req.skill, sender, mode)
-        raise HailError("name an agent or a skill")
+        raise UsageError("name an agent or a skill")
 
     def _strict(self, sender: str, recipient: str, mode: str) -> str | None:
         """Why [policy] strict_advice refuses this advice call, or None."""
@@ -239,7 +237,7 @@ class Hub:
         event = Event(ctx.thread, ctx.hop, ctx.sender, ctx.recipient, kind, ctx.mode, reason or message, ctx.max_hops)
         self._emit(event)
         if reason:
-            raise Refused(reason)
+            raise Throttled(reason) if getattr(reason, "temporary", False) else Refused(reason)
 
     def _daily(self, name: str) -> int | None:
         agent = self.config.agents.get(name)
@@ -249,7 +247,7 @@ class Hub:
         try:
             return self.consult(Request(message=message, agent=name, thread=thread, mode=mode))
         except HailError as exc:
-            return Outcome(thread, 0, name, str(exc), False)
+            return Outcome(thread, 0, name, str(exc), False, exc.exit_code)
 
     def _log(self, ctx: Context, kind: str, text: str, reverse: bool = False) -> None:
         sender, recipient = (ctx.recipient, ctx.sender) if reverse else (ctx.sender, ctx.recipient)

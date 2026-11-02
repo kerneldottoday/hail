@@ -51,7 +51,7 @@ def test_ask_from_stdin(agents_file, fake_ask, monkeypatch):
 
 def test_ask_unknown_agent(agents_file, capsys):
     agents_file(CONFIG)
-    assert cli.main(["ghost", "x"]) == 1
+    assert cli.main(["ghost", "x"]) == 5
     assert "unknown agent 'ghost'" in capsys.readouterr().err
 
 
@@ -82,7 +82,7 @@ def test_init_then_add(agents_file, capsys):
     )
     agent = load_agents()["kernel"]
     assert agent.host == "vps" and agent.timeout == 90 and agent.variables["agent_id"] == "main"
-    assert cli.main(["add", "kernel", "--preset", "claude"]) == 1
+    assert cli.main(["add", "kernel", "--preset", "claude"]) == 3
 
 
 def test_add_creates_file_and_command(agents_file):
@@ -94,7 +94,7 @@ def test_add_creates_file_and_command(agents_file):
 
 def test_add_rejects_bad_pair(agents_file, capsys):
     agents_file("")
-    assert cli.main(["add", "x", "--preset", "claude", "--set", "novalue"]) == 1
+    assert cli.main(["add", "x", "--preset", "claude", "--set", "novalue"]) == 2
     assert "KEY=VALUE" in capsys.readouterr().err
 
 
@@ -176,7 +176,7 @@ def test_mcp_serve_loop():
 def test_cli_nonzero_exit(agents_file, monkeypatch, capsys):
     agents_file(CONFIG)
     monkeypatch.setattr("hail.hub.ask", lambda a, m, **kw: Reply(a.name, "crash", "", 2))
-    assert cli.main(["hermes", "x"]) == 1
+    assert cli.main(["hermes", "x"]) == 4
     assert "exited with an error" in capsys.readouterr().err
 
 
@@ -199,7 +199,7 @@ def test_mcp_nonzero_exit_is_error(agents_file, monkeypatch):
 )
 def test_add_rejects_unsafe_values(agents_file, capsys, args, msg):
     agents_file("")
-    assert cli.main(["add", "x", "--preset", "command", *args]) == 1
+    assert cli.main(["add", "x", "--preset", "command", *args]) == 2
     assert msg in capsys.readouterr().err
 
 

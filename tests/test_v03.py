@@ -160,7 +160,7 @@ def test_prune_command(agents_file, capsys):
     agents_file("")
     assert main(["prune", "--days", "30"]) == 0
     assert "removed 0" in capsys.readouterr().out
-    assert main(["prune", "--days", "x"]) == 1
+    assert main(["prune", "--days", "x"]) == 2
 
 
 # --- review fixes -----------------------------------------------------------------------------
@@ -232,4 +232,4 @@ def test_prune_command_rejects_odd_digits(agents_file):
     from hail.cli import main
 
     agents_file("")
-    assert main(["prune", "--days", "²"]) == 1
+    assert main(["prune", "--days", "²"]) == 2

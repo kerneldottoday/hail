@@ -7,10 +7,11 @@ import sys
 import time
 from dataclasses import dataclass
 
-from . import tasks
+from . import render, tasks
 from .app import make_app
-from .hub import Request
-from .runner import HailError
+from .config import ConfigError
+from .errors import EXIT, HailError, NotFound, UsageError
+from .hub import CouncilResult, Outcome, Request
 from .store import Message, default_store
 from .telegram import Telegram, TelegramError
 
@@ -34,7 +35,7 @@ def parse(argv: list[str]) -> Parsed:
             flags[flag] = "1"
             continue
         if not rest:
-            raise HailError(f"{flag} needs a value")
+            raise UsageError(f"{flag} needs a value")
         flags[flag] = rest.pop(0)
     words = [w for w in rest if w not in BOOL_FLAGS]
     if len(words) != len(rest):
@@ -66,7 +67,7 @@ def cmd_ask(agent: str | None, argv: list[str]) -> int:
         print(f"hail: thread {out.thread} · hop {out.hop}", file=sys.stderr)
     if not out.ok:
         print(f"hail: '{out.agent}' exited with an error", file=sys.stderr)
-    return 0 if out.ok else 1
+    return EXIT["ok"] if out.ok else EXIT["agent_error"]
 
 
 def cmd_ask_skill(argv: list[str]) -> int:
@@ -82,23 +83,31 @@ def cmd_send(argv: list[str]) -> int:
     app = make_app()
     req = _request(agent, parsed)
     task_id, thread = tasks.submit(app.store, req, app.hub.thread_for(req.thread), app.hub.sender_for(req.sender))
-    print(f"{task_id} (thread {thread}) - check with: hail status {task_id}")
+    if "--json" in parsed.flags:
+        print(render.dumps({"id": task_id, "thread": thread, "status": "submitted"}))
+    else:
+        print(f"{task_id} (thread {thread}) - check with: hail status {task_id}")
     return 0
 
 
 def cmd_status(argv: list[str]) -> int:
+    parsed = parse(argv)
+    argv = list(parsed.words)
     if len(argv) != 1:
-        raise HailError("usage: hail status <task-id>")
+        raise UsageError("usage: hail status <task-id>")
     task = tasks.status(default_store(), argv[0])
     if task is None:
-        raise HailError(f"unknown task '{argv[0]}'")
-    print(tasks.describe(task))
-    return 0 if task.status != "failed" else 1
+        raise NotFound(f"unknown task '{argv[0]}'")
+    if "--json" in parsed.flags:
+        print(render.dumps(render.task_row(task)))
+    else:
+        print(tasks.describe(task))
+    return 0 if task.status != "failed" else EXIT["agent_error"]
 
 
 def cmd_task(argv: list[str]) -> int:
     if len(argv) != 1:
-        raise HailError("usage: hail _task <task-id>")
+        raise UsageError("usage: hail _task <task-id>")
     app = make_app()
     tasks.run(app.hub, app.store, argv[0])
     return 0
@@ -111,36 +120,78 @@ def cmd_council(argv: list[str]) -> int:
     result = make_app().hub.council(
         question, names, synth=parsed.flags.get("--synth"), thread=parsed.flags.get("--thread")
     )
+    if "--json" in parsed.flags:
+        print(render.dumps(_council_row(result)))
+    else:
+        _print_council(result)
+    print(f"hail: thread {result.thread}", file=sys.stderr)
+    return _council_exit(result)
+
+
+def _council_exit(result: CouncilResult) -> int:
+    """0 if one agent answered; else the shared hail exit code (e.g. 5 when no agent exists), or 4."""
+    if any(a.ok for a in result.answers):
+        return EXIT["ok"]
+    codes = {a.exit_code or EXIT["agent_error"] for a in result.answers}
+    return codes.pop() if len(codes) == 1 else EXIT["agent_error"]
+
+
+def _outcome_row(out: Outcome) -> dict[str, object]:
+    return {"agent": out.agent, "reply": out.text, "ok": out.ok, "hop": out.hop}
+
+
+def _council_row(result: CouncilResult) -> dict[str, object]:
+    return render.compact(
+        {
+            "thread": result.thread,
+            "answers": [_outcome_row(a) for a in result.answers],
+            "synthesis": _outcome_row(result.synthesis) if result.synthesis else None,
+        }
+    )
+
+
+def _print_council(result: CouncilResult) -> None:
     for answer in result.answers:
         print(f"== {answer.agent}{'' if answer.ok else ' (failed)'}\n{answer.text}\n")
     if result.synthesis:
         print(f"== synthesis by {result.synthesis.agent}\n{result.synthesis.text}")
-    print(f"hail: thread {result.thread}", file=sys.stderr)
-    return 0 if any(a.ok for a in result.answers) else 1
 
 
 def cmd_log(argv: list[str]) -> int:
     parsed = parse(argv)
     limit = _int(parsed.flags.get("-n", "20"))
-    for msg in default_store().recent(limit, grep=parsed.flags.get("--grep")):
+    messages = default_store().recent(limit, grep=parsed.flags.get("--grep"))
+    if "--json" in parsed.flags:
+        render.print_lines(render.message_row(m) for m in messages)  # already oldest first
+        return 0
+    for msg in messages:
         print(_line(msg))
     return 0
 
 
 def cmd_threads(argv: list[str]) -> int:
     parsed = parse(argv)
-    for t in default_store().threads(_int(parsed.flags.get("-n", "10"))):
+    threads = default_store().threads(_int(parsed.flags.get("-n", "10")))
+    if "--json" in parsed.flags:
+        render.print_lines(render.thread_row(t) for t in threads)
+        return 0
+    for t in threads:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(t.last))
         print(f"{t.thread:<14} {when}  {t.count:>3} messages{'  STOPPED' if t.stopped else ''}")
     return 0
 
 
 def cmd_thread(argv: list[str]) -> int:
+    parsed = parse(argv)
+    argv = list(parsed.words)
     if len(argv) != 1:
-        raise HailError("usage: hail thread <thread-id>")
+        raise UsageError("usage: hail thread <thread-id>")
     messages = default_store().thread(argv[0])
     if not messages:
-        raise HailError(f"no messages in thread '{argv[0]}'")
+        raise NotFound(f"no messages in thread '{argv[0]}'")
+    if "--json" in parsed.flags:
+        render.print_lines(render.message_row(m) for m in messages)
+        return 0
     for msg in messages:
         print(_line(msg, full=True))
     return 0
@@ -148,7 +199,7 @@ def cmd_thread(argv: list[str]) -> int:
 
 def cmd_stop(argv: list[str], stopped: bool = True) -> int:
     if len(argv) != 1:
-        raise HailError(f"usage: hail {'stop' if stopped else 'resume'} <thread-id>")
+        raise UsageError(f"usage: hail {'stop' if stopped else 'resume'} <thread-id>")
     default_store().set_stopped(argv[0], stopped)
     print(f"thread {argv[0]} {'stopped' if stopped else 'resumed'}")
     return 0
@@ -158,7 +209,7 @@ def cmd_telegram(argv: list[str]) -> int:
     action = argv[0] if argv else ""
     app = make_app()
     if app.telegram is None:
-        raise HailError("telegram is not configured: add [telegram] chat_id and a token_file (see README)")
+        raise ConfigError("telegram is not configured: add [telegram] chat_id and a token_file (see README)")
     try:
         if action == "test":
             app.telegram.send("✅ hail is connected to this chat.")
@@ -168,7 +219,7 @@ def cmd_telegram(argv: list[str]) -> int:
             return _watch(app.telegram)
     except TelegramError as exc:
         raise HailError(f"telegram: {exc}") from None
-    raise HailError("usage: hail telegram test|watch")
+    raise UsageError("usage: hail telegram test|watch")
 
 
 def _watch(tg: Telegram) -> int:
@@ -195,11 +246,11 @@ def _line(msg: Message, full: bool = False) -> str:
 
 def _int(value: str) -> int:
     if not value.isdigit() or int(value) <= 0:
-        raise HailError(f"expected a positive number, got '{value}'")
+        raise UsageError(f"expected a positive number, got '{value}'")
     return int(value)
 
 
 def _read_stdin() -> str:
     if sys.stdin is None or sys.stdin.isatty():
-        raise HailError("no message (pass it as an argument or on stdin)")
+        raise UsageError("no message (pass it as an argument or on stdin)")
     return sys.stdin.read()

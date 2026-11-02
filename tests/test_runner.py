@@ -42,7 +42,7 @@ def test_stdin_preset_local_and_remote():
     local = build(parse_agent("c", {"preset": "claude", "bin": "nope-xyz"}), "hi")
     assert local.argv == ("nope-xyz", "-p") and local.stdin == "hi"
     remote = build(parse_agent("c", {"preset": "claude", "host": "vps"}), "hi")
-    assert remote.argv[-1].endswith("exec \"$@\" claude -p'") and remote.stdin == "hi"
+    assert remote.argv[-1].endswith('exec "$@" claude -p\'') and remote.stdin == "hi"
 
 
 def test_windows_batch_shim_is_refused(monkeypatch):

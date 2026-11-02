@@ -63,7 +63,7 @@ def test_cli_refusal_exit_code(fake, capsys, monkeypatch):
     monkeypatch.setenv("HAIL_SELF", "claude")
     monkeypatch.setenv("HAIL_THREAD", "t-1")
     monkeypatch.setenv("HAIL_HOP", "1")
-    assert cli.main(["hermes", "--mode", "action", "do it"]) == 1
+    assert cli.main(["hermes", "--mode", "action", "do it"]) == 7
     assert "action" in capsys.readouterr().err
 
 
@@ -75,8 +75,8 @@ def test_cli_send_and_status(fake, capsys):
     assert cli.main(["_task", task_id]) == 0
     assert cli.main(["status", task_id]) == 0
     assert "ok from claude" in capsys.readouterr().out
-    assert cli.main(["status", "k-none"]) == 1
-    assert cli.main(["status"]) == 1
+    assert cli.main(["status", "k-none"]) == 5
+    assert cli.main(["status"]) == 2
 
 
 def test_cli_council(fake, capsys):
@@ -98,16 +98,16 @@ def test_cli_log_threads_thread_stop(fake, capsys):
     assert "ok from claude" in capsys.readouterr().out
     assert cli.main(["stop", thread]) == 0
     assert default_store().is_stopped(thread)
-    assert cli.main(["claude", "--thread", thread, "again"]) == 1
+    assert cli.main(["claude", "--thread", thread, "again"]) == 7
     assert cli.main(["resume", thread]) == 0
     assert "STOPPED" not in (cli.main(["threads"]) or capsys.readouterr().out)
-    assert cli.main(["thread", "t-none"]) == 1
-    assert cli.main(["log", "-n", "x"]) == 1
-    assert cli.main(["stop"]) == 1
+    assert cli.main(["thread", "t-none"]) == 5
+    assert cli.main(["log", "-n", "x"]) == 2
+    assert cli.main(["stop"]) == 2
 
 
 def test_cli_telegram_not_configured(fake, capsys):
-    assert cli.main(["telegram", "test"]) == 1
+    assert cli.main(["telegram", "test"]) == 3
     assert "not configured" in capsys.readouterr().err
 
 
@@ -119,7 +119,7 @@ def test_cli_telegram_test_and_bad_action(agents_file, monkeypatch, tmp_path, ca
     monkeypatch.setattr("hail.telegram.http_api", lambda tok, timeout=15: lambda m, p: sent.append((m, p)))
     assert cli.main(["telegram", "test"]) == 0
     assert sent[0][0] == "sendMessage"
-    assert cli.main(["telegram", "nope"]) == 1
+    assert cli.main(["telegram", "nope"]) == 2
 
 
 def test_telegram_misconfigured_is_disabled_not_fatal(agents_file, capsys, monkeypatch):

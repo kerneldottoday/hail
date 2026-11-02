@@ -6,10 +6,13 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .config import Agent
+from .errors import AgentUnusable, Temporary, UsageError
+from .errors import HailError as HailError  # re-exported: older imports use hail.runner.HailError
 from .parsers import parse
 from .presets import get_preset
 
@@ -18,10 +21,21 @@ MESSAGE = "{message}"
 CMD_SHIM_SUFFIXES = (".cmd", ".bat")
 KILL_GRACE = 5  # seconds between TERM and KILL on the server
 ADVICE_COMMAND = "advice_command"  # preset 'command': the read-only variant run in advice mode
-
-
-class HailError(RuntimeError):
-    """The agent could not be reached or returned nothing usable."""
+SSH_FAILED = 255  # ssh's own exit code when it could not connect or authenticate
+RETRY_WINDOW = 15.0  # seconds: an SSH failure this fast happened before the agent could start
+RETRY_PAUSE = 2.0  # seconds before the single retry
+# ssh messages that only appear before a session (and so the agent) could start. A reset or broken pipe
+# after login, or an agent exiting 255 itself, is not in this list: resending could run the agent twice.
+BEFORE_SESSION = (
+    "could not resolve hostname",
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "no route to host",
+    "network is unreachable",
+    "kex_exchange_identification",
+    "connection closed by",
+)
 
 
 @dataclass(frozen=True)
@@ -73,7 +87,7 @@ def build(
     inline = MESSAGE in template
     if inline and resolved.lower().endswith(CMD_SHIM_SUFFIXES):
         # cmd.exe re-parses .cmd/.bat arguments; a message could inject commands.
-        raise HailError(
+        raise AgentUnusable(
             f"agent '{agent.name}': {resolved} is a Windows batch shim, which cannot receive "
             "a message safely as an argument. Use preset 'command' with a program that reads stdin."
         )
@@ -140,7 +154,7 @@ def _fill(token: str, agent: Agent, message: str) -> str:
     try:
         return token.format_map(agent.variables)
     except KeyError as exc:
-        raise HailError(f"agent '{agent.name}': missing setting {exc}") from None
+        raise AgentUnusable(f"agent '{agent.name}': missing setting {exc}") from None
 
 
 def remote_quote(token: str) -> str:
@@ -165,14 +179,37 @@ def ask(
 ) -> Reply:
     message = message.strip()
     if not message:
-        raise HailError("empty message")
+        raise UsageError("empty message")
     if "\x00" in message:
-        raise HailError("message contains a NUL byte")
+        raise UsageError("message contains a NUL byte")
     if len(message) > agent.max_chars:
-        raise HailError(f"message too long ({len(message)} > {agent.max_chars} characters)")
+        raise UsageError(f"message too long ({len(message)} > {agent.max_chars} characters)")
     inv = build(agent, message, env=env, mode=mode, drop_env=drop_env)
+    started = time.monotonic()
+    proc = _run(agent, inv)
+    if _ssh_failed_early(agent, proc, time.monotonic() - started):
+        time.sleep(RETRY_PAUSE)  # once, and only when ssh says the session never opened
+        proc = _run(agent, inv)
+    raw = proc.stdout.decode("utf-8", errors="replace")
+    text = parse(agent.parser, raw)
+    if not text:
+        err = proc.stderr.decode("utf-8", errors="replace").strip()[-500:]
+        if agent.is_remote and proc.returncode == SSH_FAILED:
+            raise Temporary(f"'{agent.name}': ssh could not reach {agent.host} (exit 255): {err}")
+        raise AgentUnusable(f"'{agent.name}' returned nothing (exit {proc.returncode}): {err}")
+    return Reply(agent=agent.name, text=text, raw=raw, exit_code=proc.returncode)
+
+
+def _ssh_failed_early(agent: Agent, proc: subprocess.CompletedProcess[bytes], elapsed: float) -> bool:
+    if not (agent.is_remote and proc.returncode == SSH_FAILED and not proc.stdout.strip() and elapsed < RETRY_WINDOW):
+        return False
+    err = proc.stderr.decode("utf-8", errors="replace").lower()
+    return any(marker in err for marker in BEFORE_SESSION)
+
+
+def _run(agent: Agent, inv: Invocation) -> subprocess.CompletedProcess[bytes]:
     try:
-        proc = subprocess.run(
+        return subprocess.run(
             inv.argv,
             input=inv.stdin.encode("utf-8") if inv.stdin is not None else None,
             # no message on stdin: give an empty one, never hail's own (the MCP stream under ``hail mcp``)
@@ -184,14 +221,8 @@ def ask(
             check=False,
         )
     except subprocess.TimeoutExpired:
-        raise HailError(f"'{agent.name}' did not answer within {agent.timeout}s") from None
+        raise Temporary(f"'{agent.name}' did not answer within {agent.timeout}s") from None
     except FileNotFoundError as exc:
-        raise HailError(f"'{agent.name}': command not found ({exc.filename})") from None
+        raise AgentUnusable(f"'{agent.name}': command not found ({exc.filename})") from None
     except OSError as exc:
-        raise HailError(f"'{agent.name}': could not start ({exc})") from None
-    raw = proc.stdout.decode("utf-8", errors="replace")
-    text = parse(agent.parser, raw)
-    if not text:
-        err = proc.stderr.decode("utf-8", errors="replace").strip()[-500:]
-        raise HailError(f"'{agent.name}' returned nothing (exit {proc.returncode}): {err}")
-    return Reply(agent=agent.name, text=text, raw=raw, exit_code=proc.returncode)
+        raise AgentUnusable(f"'{agent.name}': could not start ({exc})") from None

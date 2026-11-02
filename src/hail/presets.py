@@ -72,11 +72,18 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
             advice_argv=("--sandbox", "read-only"),
             description="OpenAI Codex CLI (codex exec, prompt on stdin)",
         ),
+        # No advice switch: agy's --mode plan only prefixes the prompt with /plan, it is not read-only.
+        "agy": Preset(
+            argv=("{bin}", "-p", "{message}", "--output-format", "json"),
+            parser="json:response",
+            defaults=MappingProxyType({"bin": "agy"}),
+            description="Google Antigravity CLI (agy -p, JSON output)",
+        ),
         # No advice switch: gemini's plan mode turns into yolo once the plan is done in headless runs.
         "gemini": Preset(
             argv=("{bin}",),
             defaults=MappingProxyType({"bin": "gemini"}),
-            description="Google Gemini CLI (headless, prompt on stdin)",
+            description="Legacy Gemini CLI (API key only since 2026-06-18; use agy), prompt on stdin",
         ),
         "ollama": Preset(
             argv=("{bin}", "run", "{model}"),

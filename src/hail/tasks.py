@@ -13,8 +13,8 @@ import time
 from dataclasses import asdict
 from typing import Any, Protocol
 
+from .errors import NotFound, Temporary
 from .hub import Outcome, Request
-from .runner import HailError
 from .store import Store, Task
 
 MAX_ACTIVE = 8  # background tasks submitted or working at once
@@ -28,7 +28,7 @@ class Consults(Protocol):
 def submit(store: Store, req: Request, thread: str, sender: str) -> tuple[str, str]:
     store.reap_stale(STALE_AFTER)
     if store.count_active_tasks() >= MAX_ACTIVE:
-        raise HailError(f"too many background tasks ({MAX_ACTIVE} running): wait for one to finish")
+        raise Temporary(f"too many background tasks ({MAX_ACTIVE} running): wait for one to finish")
     task_id = "k-" + secrets.token_hex(4)
     store.create_task(task_id, {**asdict(req), "thread": thread, "sender": sender})
     spawn(task_id)
@@ -62,7 +62,7 @@ def _detached() -> dict[str, Any]:
 def run(hub: Consults, store: Store, task_id: str) -> None:
     task = store.get_task(task_id)
     if task is None:
-        raise HailError(f"unknown task '{task_id}'")
+        raise NotFound(f"unknown task '{task_id}'")
     store.update_task(task_id, "working")
     try:
         req = Request(**task.request)
