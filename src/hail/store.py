@@ -7,7 +7,6 @@ connection per operation keeps it safe across threads.
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
@@ -17,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .errors import LaterReason, UsageError
+from .errors import LaterReason
 from .redact import redact
+from .taskstore import ACTIVE, TaskStore
+from .taskstore import Task as Task  # re-exported: callers import it from here
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -44,7 +45,6 @@ CREATE TABLE IF NOT EXISTS inbox_seen (
 """
 MESSAGE_COLUMNS = "id, ts, thread, hop, sender, recipient, kind, mode, text"
 DAY = 86400
-ACTIVE = "('submitted', 'working')"
 
 
 @dataclass(frozen=True)
@@ -67,31 +67,6 @@ class ThreadSummary:
     last: float
     count: int
     stopped: bool
-
-
-@dataclass(frozen=True)
-class Task:
-    id: str
-    status: str  # submitted | working | completed | failed
-    request: dict[str, Any]
-    result: str
-    error: str
-    created: float
-    updated: float
-    ref: str | None = None  # the --ref that names it, if any
-
-
-def _ref_hit(db: sqlite3.Connection, ref: str, digest: str) -> str | None:
-    """The live task already named ``ref`` (a failed one may be retried), or None."""
-    row = db.execute(
-        "SELECT r.task, r.digest, t.status FROM task_refs r LEFT JOIN tasks t ON t.id = r.task WHERE r.ref = ?",
-        (ref,),
-    ).fetchone()
-    if row is None or row[2] is None:
-        return None
-    if row[1] != digest:
-        raise UsageError(f"ref '{ref}' already names another request: use a new ref")
-    return None if row[2] == "failed" else str(row[0])
 
 
 def _budget_reason(db: sqlite3.Connection, thread: str, now: float, max_calls: int, rate: int) -> str | None:
@@ -137,7 +112,7 @@ def default_store() -> Store:
     return Store(hail_home() / "hail.db")
 
 
-class Store:
+class Store(TaskStore):
     def __init__(self, path: Path) -> None:
         self.path = path
         _make_private(path)
@@ -204,22 +179,22 @@ class Store:
             db.close()
         return reason
 
-    def count_active_tasks(self) -> int:
-        row = self._one(f"SELECT COUNT(*) FROM tasks WHERE status IN {ACTIVE}", ())
-        return int(row[0]) if row else 0
+    def thread(self, thread: str, after: int = 0) -> tuple[Message, ...]:
+        return self._messages("WHERE thread = ? AND id > ? ORDER BY id", (thread, after))
 
-    def reap_stale(self, max_age: float) -> int:
-        """Fail tasks not updated for ``max_age`` seconds: their worker died (reboot, kill)."""
-        now = time.time()
+    def participants(self, threads: tuple[str, ...]) -> dict[str, set[str]]:
+        """Who sent or received something in each thread, in one query."""
+        found: dict[str, set[str]] = {t: set() for t in threads}
+        if not threads:
+            return found
+        marks = ",".join("?" * len(threads))
         with self._db() as db:
-            cur = db.execute(
-                f"UPDATE tasks SET status = 'failed', error = ?, updated = ? WHERE status IN {ACTIVE} AND updated < ?",
-                ("stale: the background worker stopped without reporting", now, now - max_age),
-            )
-            return cur.rowcount
-
-    def thread(self, thread: str) -> tuple[Message, ...]:
-        return self._messages("WHERE thread = ? ORDER BY id", (thread,))
+            rows = db.execute(
+                f"SELECT DISTINCT thread, sender, recipient FROM messages WHERE thread IN ({marks})", threads
+            ).fetchall()
+        for thread, sender, recipient in rows:
+            found[thread].update(n for n in (sender, recipient) if n)
+        return found
 
     def recent(self, limit: int, grep: str | None = None) -> tuple[Message, ...]:
         where, args = ("WHERE text LIKE ?", (f"%{grep}%",)) if grep else ("", ())
@@ -249,16 +224,25 @@ class Store:
         row = self._one("SELECT COUNT(*) FROM messages WHERE thread = ? AND kind = 'ask'", (thread,))
         return int(row[0]) if row else 0
 
+    def asks_to(self, recipient: str, since: float) -> int:
+        """Asks sent to ``recipient`` since ``since`` (the window max_calls_per_day counts)."""
+        row = self._one(
+            "SELECT COUNT(*) FROM messages WHERE recipient = ? AND kind = 'ask' AND ts >= ?", (recipient, since)
+        )
+        return int(row[0]) if row else 0
+
     def asks_since(self, since: float) -> int:
         row = self._one("SELECT COUNT(*) FROM messages WHERE kind = 'ask' AND ts >= ?", (since,))
         return int(row[0]) if row else 0
 
-    def threads(self, limit: int) -> tuple[ThreadSummary, ...]:
+    def threads(self, limit: int, only: str | None = None) -> tuple[ThreadSummary, ...]:
+        """Threads, most recently active first; ``only`` = that single thread."""
+        where, args = ("WHERE m.thread = ? ", (only, limit)) if only else ("", (limit,))
         with self._db() as db:
             rows = db.execute(
                 "SELECT m.thread, MIN(m.ts), MAX(m.ts), COUNT(*), COALESCE(t.stopped, 0) FROM messages m "
-                "LEFT JOIN threads t ON t.thread = m.thread GROUP BY m.thread ORDER BY MAX(m.id) DESC LIMIT ?",
-                (limit,),
+                f"LEFT JOIN threads t ON t.thread = m.thread {where}GROUP BY m.thread ORDER BY MAX(m.id) DESC LIMIT ?",
+                args,
             ).fetchall()
         return tuple(ThreadSummary(r[0], r[1], r[2], r[3], bool(r[4])) for r in rows)
 
@@ -291,63 +275,6 @@ class Store:
     def thread_of_topic(self, topic_id: int) -> str | None:
         row = self._one("SELECT thread FROM threads WHERE topic_id = ?", (topic_id,))
         return str(row[0]) if row else None
-
-    # tasks ------------------------------------------------------------------
-
-    def create_task(self, task_id: str, request: dict[str, Any], ref: str | None = None, digest: str = "") -> str:
-        """Record a task and return its id: the existing one if ``ref`` already names a live task."""
-        now = time.time()
-        db = sqlite3.connect(self.path, timeout=15, isolation_level=None)
-        try:
-            db.execute("BEGIN IMMEDIATE")  # two sends with the same ref cannot both create a task
-            existing = _ref_hit(db, ref, digest) if ref else None
-            if existing is None:
-                db.execute(
-                    "INSERT INTO tasks (id, created, updated, status, request) VALUES (?,?,?,?,?)",
-                    (task_id, now, now, "submitted", json.dumps(request, ensure_ascii=False)),
-                )
-                if ref:
-                    db.execute(
-                        "INSERT OR REPLACE INTO task_refs (ref, task, digest) VALUES (?,?,?)", (ref, task_id, digest)
-                    )
-            db.execute("COMMIT")
-        except BaseException:
-            if db.in_transaction:
-                db.execute("ROLLBACK")
-            raise
-        finally:
-            db.close()
-        return existing or task_id
-
-    def task_for_ref(self, ref: str, digest: str) -> str | None:
-        with self._db() as db:
-            return _ref_hit(db, ref, digest)
-
-    def update_task(self, task_id: str, status: str, result: str = "", error: str = "") -> None:
-        with self._db() as db:
-            db.execute(
-                "UPDATE tasks SET status = ?, result = ?, error = ?, updated = ? WHERE id = ?",
-                (status, redact(result), redact(error), time.time(), task_id),
-            )
-
-    def claim_task(self, task_id: str) -> bool:
-        """Move a submitted task to 'working'; False if something else already did."""
-        with self._db() as db:
-            cur = db.execute(
-                "UPDATE tasks SET status = 'working', updated = ? WHERE id = ? AND status = 'submitted'",
-                (time.time(), task_id),
-            )
-            return cur.rowcount == 1
-
-    def get_task(self, task_id: str) -> Task | None:
-        row = self._one(
-            "SELECT t.id, t.status, t.request, t.result, t.error, t.created, t.updated, r.ref "
-            "FROM tasks t LEFT JOIN task_refs r ON r.task = t.id WHERE t.id = ?",
-            (task_id,),
-        )
-        if not row:
-            return None
-        return Task(row[0], row[1], json.loads(row[2]), row[3], row[4], row[5], row[6], row[7])
 
     # retention ----------------------------------------------------------------
 

@@ -34,6 +34,7 @@ uv tool install hail-agent
 # or
 pipx install hail-agent
 # latest main: uv tool install git+https://github.com/kerneldottoday/hail
+# with the keyboard screen (hail tui, adds Textual): uv tool install 'hail-agent[tui]'
 ```
 
 Python 3.10+. The distribution name `hail-agent` is unrelated to the
@@ -147,6 +148,7 @@ hail jobs [agent] [--all]  what agents have scheduled (next run in UTC + local t
 hail inbox [agent] [--all] what agents delivered since you last looked
 hail inbox read <agent> <id> | clear [agent]
 hail prune --days N        delete journal entries older than N days
+hail tui                   threads, replies and agents on one keyboard screen (extra: tui)
 hail list                  configured agents (with skills and cost)
 hail help agents           manual for an AI agent: --json, exit codes, the agents configured here
 hail add <name> --preset <p> [--host <alias>] [--command <cmd>] [--set key=value]
@@ -255,6 +257,15 @@ topics = true                                  # one topic per thread
 ```
 
 Every exchange between agents is posted in its thread's topic, with API keys, tokens and passwords redacted. Run `hail telegram watch` (e.g. as a systemd service) to accept commands from `allowed_users`: `/stop` and `/resume` inside a topic block or reopen that thread, any other text in a topic becomes a note the agents see on their next call, `/ask <agent> <message>` starts a new thread in the background, `/threads` lists recent ones.
+
+## Keyboard screen: `hail tui`
+
+`uv tool install 'hail-agent[tui]'` adds [Textual](https://textual.textualize.io) (hail itself stays dependency-free), then `hail tui`:
+
+- left, the threads between your agents, newest first, with who took part; right, the open thread message by message (agent text is shown as plain, untrusted text, never as markup);
+- `j`/`k` move, `r` replies to the agent asked last in the thread (sent as a background task, so the screen never waits), `s` stops or resumes the thread, `a` shows the agents with their read-only mode and today's calls against `max_calls_per_day`, `g` refreshes (it also refreshes every 3 s), `q` quits.
+
+It reads the journal and the agents file (once, at start: restart it after `hail add`) and nothing else: no account, no server, works over SSH on the VPS. An agent cannot run it under `cli_access = read`.
 
 ## Journal
 

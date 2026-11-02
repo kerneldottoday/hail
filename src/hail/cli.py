@@ -110,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         "jobs": jobs_inbox.cmd_jobs,
         "inbox": jobs_inbox.cmd_inbox,
         "prune": cmd_prune,
+        "tui": commands.cmd_tui,
         "_task": commands.cmd_task,
     }
     try:
@@ -151,6 +152,7 @@ def usage() -> str:
         "  hail jobs [agent] [--all]   what agents have scheduled (UTC + local time)\n"
         "  hail inbox [agent] [--all]  what agents delivered since you last looked\n"
         "  hail inbox read <agent> <id> | clear [agent]\n"
+        "  hail tui                    threads, replies and agents on one keyboard screen (extra: tui)\n"
         "  hail prune --days N         delete journal entries older than N days\n"
         "  hail list                   list configured agents\n"
         "  hail init                   create the agents file\n"

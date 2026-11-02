@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 import time
@@ -259,3 +260,23 @@ def _read_stdin() -> str:
     if sys.stdin is None or sys.stdin.isatty():
         raise UsageError("no message (pass it as an argument or on stdin)")
     return sys.stdin.read()
+
+
+TUI_MISSING = "hail tui needs Textual: uv tool install 'hail-agent[tui]' (or pip install 'hail-agent[tui]')"
+
+
+def cmd_tui(argv: list[str]) -> int:
+    if argv:
+        raise UsageError("usage: hail tui")
+    if importlib.util.find_spec("textual") is None:
+        raise HailError(TUI_MISSING)
+    from .tui import HailBoard
+
+    app = make_app()
+
+    def submit(agent: str, thread: str, message: str) -> str:
+        req = Request(message=message, agent=agent, thread=thread)
+        return tasks.submit(app.store, req, app.hub.thread_for(thread), app.hub.sender_for(None)).id
+
+    HailBoard(app.store, app.config, submit).run()
+    return 0
