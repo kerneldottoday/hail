@@ -1,6 +1,6 @@
 # hail
 
-![hail in 45 seconds: one command to reach any agent, agents that consult each other, read-only advice mode, one inbox](docs/demo.gif)
+![hail in 45 seconds: one command to reach any agent, agents that consult each other, read-only advice mode, one inbox](https://raw.githubusercontent.com/kerneldottoday/hail/main/docs/demo.gif)
 
 **Talk to your AI agents from anywhere, and let them talk to each other.** One command to message Hermes, OpenClaw, Claude Code, Codex, Antigravity CLI (`agy`), a local Ollama model or any CLI agent, on this machine or on a server over SSH, from your terminal or from any MCP client. When an agent is stuck, it can consult another one itself, with loop guards, a journal and an optional Telegram channel to watch it happen.
 
@@ -275,8 +275,15 @@ Every exchange between agents is posted in its thread's topic, with API keys, to
 
 `uv tool install 'hail-agent[tui]'` adds [Textual](https://textual.textualize.io) (hail itself stays dependency-free), then `hail tui`:
 
-- left, the threads between your agents, newest first, with who took part; right, the open thread message by message (agent text is shown as plain, untrusted text, never as markup);
-- `j`/`k` move, `r` replies to the agent asked last in the thread (sent as a background task, so the screen never waits), `s` stops or resumes the thread, `a` shows the agents with their read-only mode and today's calls against `max_calls_per_day`, `g` refreshes (it also refreshes every 3 s), `q` quits.
+![hail tui: folders, threads and the open thread in three panes](https://raw.githubusercontent.com/kerneldottoday/hail/main/docs/tui.gif)
+
+- three numbered panes: **[0] folders** (All, one per agent, Stopped, Today) filter **[1] the threads**, newest first, with who took part; **[2]** shows the open thread message by message, or the hail logo when none is open (agent text is shown as plain, untrusted text, never as markup);
+- a green `●` marks a thread that got agent messages since you last saw it (your own messages do not count);
+- `h`/`l` or `0`/`1`/`2` change pane, `j`/`k` move, `enter` opens a thread and `esc` closes it;
+- `r` (or `i`) replies to the agent asked last in the thread: the status bar switches from `NORMAL` to `INSERT`, and the reply goes as a background task, so the screen never waits;
+- `s` stops or resumes the thread, `a` shows the agents with their read-only mode and today's calls against `max_calls_per_day`, `g` refreshes (it also refreshes every 3 s), `q` quits.
+
+The demo above runs on a made-up journal: `vhs docs/demo/tui.tape` records it again.
 
 It reads the journal and the agents file (once, at start: restart it after `hail add`) and nothing else: no account, no server, works over SSH on the VPS. An agent cannot run it under `cli_access = read`.
 

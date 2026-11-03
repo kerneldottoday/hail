@@ -31,6 +31,7 @@ Submit = Callable[[str, str, str], str]  # (agent, thread, message) -> task id
 REFRESH_SECONDS = 3.0
 SHIMMER_SECONDS = 0.08
 THREAD_LIMIT = 50
+LOG_MIN_WIDTH = 20
 KIND_STYLE = {"ask": "bold", "reply": "", "error": "red", "refused": "yellow", "human": "cyan", "council": "bold"}
 JOURNAL_ERRORS = (sqlite3.Error, OSError)
 KEYS_NORMAL = "h/l pane · j/k move · ⏎ open · r reply · s stop · a agents · esc close · q quit"
@@ -100,7 +101,8 @@ class HailBoard(App[None]):
                 yield DataTable(id="threads", cursor_type="row", zebra_stripes=True)
             with Vertical(id="pane2", classes="pane"):
                 yield Static(tui_logo.frame(0), id="logo")
-                yield RichLog(id="log", wrap=True, markup=False, highlight=False)
+                # min_width: wrap to the pane, not to RichLog's default 78 columns
+                yield RichLog(id="log", wrap=True, markup=False, highlight=False, min_width=LOG_MIN_WIDTH)
                 yield DataTable(id="agents", cursor_type="row")
         yield Input(placeholder="reply (enter to send, esc to cancel)", id="reply")
         with Horizontal(id="bar"):
@@ -265,12 +267,9 @@ class HailBoard(App[None]):
     def open_thread(self, thread: str) -> None:
         self.current = thread
         self._show_agents = False
-        try:
-            self._show(thread)
-        except JOURNAL_ERRORS as exc:
-            self._status(f"journal unavailable: {exc}")
+        self._shown = None  # rewrite from the start once the log is visible and has its real width
         self._refresh_pane2()
-        self.action_reload()  # clears the thread's unread dot
+        self.call_after_refresh(self.action_reload)  # writes the thread, clears its unread dot
 
     def _panes(self) -> tuple[Widget, ...]:
         """The focusable widget of each pane, left to right ([2] has none while it shows the logo)."""

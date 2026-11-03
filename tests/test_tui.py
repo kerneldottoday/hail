@@ -216,7 +216,8 @@ def test_refresh_without_news_keeps_the_log_and_appends_new_messages(journal):
         return unchanged, len(before), log_lines(app)
 
     unchanged, count, after = drive(app, steps)
-    assert unchanged and len(after) == count + 2 and "and one more" in after[-1]
+    # appended below what was there (wrapping to the pane may take more than 2 lines)
+    assert unchanged and len(after) > count and "and one more" in "".join(after[count:])
 
 
 def test_a_journal_error_is_shown_not_fatal(journal, monkeypatch):
