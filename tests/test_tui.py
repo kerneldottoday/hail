@@ -69,14 +69,14 @@ def test_lists_threads_newest_first_and_shows_the_first(journal):
         return [str(table.get_row_at(i)[0]) for i in range(table.row_count)], app.current
 
     rows, current = drive(app, steps)
-    assert rows == ["t-b", "t-a"] and current == "t-b"
+    assert rows == ["t-b", "t-a"] and current is None  # nothing open: the logo shows
 
 
 def test_j_moves_to_the_next_thread_and_shows_it_as_plain_text(journal):
     app = board(journal)
 
     async def steps(pilot):
-        await pilot.press("j")
+        await pilot.press("j", "enter")
         await pilot.pause()
         log = app.query_one("#log", RichLog)
         return app.current, "\n".join(line.text for line in log.lines)
@@ -91,7 +91,7 @@ def test_reply_goes_to_the_last_agent_asked_as_a_background_task(journal):
     app = board(journal, sent)
 
     async def steps(pilot):
-        await pilot.press("j", "r")
+        await pilot.press("j", "enter", "r")
         await pilot.press(*"go on")
         await pilot.press("enter")
         await pilot.pause()
@@ -106,7 +106,7 @@ def test_reply_error_is_shown_not_raised(journal):
     app = board(journal, fail=True)
 
     async def steps(pilot):
-        await pilot.press("r", *"x", "enter")
+        await pilot.press("enter", "r", *"x", "enter")
         await pilot.pause()
         return status_text(app)
 
@@ -129,7 +129,7 @@ def test_s_stops_and_resumes_the_thread(journal):
     app = board(journal)
 
     async def steps(pilot):
-        await pilot.press("s")
+        await pilot.press("enter", "s")
         stopped = journal.is_stopped("t-b")
         await pilot.press("s")
         return stopped, journal.is_stopped("t-b")
@@ -167,6 +167,7 @@ def test_new_messages_appear_on_refresh(journal):
     app = board(journal)
 
     async def steps(pilot):
+        await pilot.press("enter")
         journal.add("t-c", 1, "user", "claude", "ask", "action", "fresh")
         await pilot.press("g")
         table = app.query_one("#threads", DataTable)
@@ -202,7 +203,7 @@ def test_refresh_without_news_keeps_the_log_and_appends_new_messages(journal):
     app = board(journal)
 
     async def steps(pilot):
-        await pilot.press("j")
+        await pilot.press("j", "enter")
         await pilot.pause()
         log = app.query_one("#log", RichLog)
         before = list(log.lines)
@@ -250,7 +251,7 @@ def test_a_reply_goes_where_the_prompt_said_even_if_the_journal_moves(journal):
     app = board(journal, sent)
 
     async def steps(pilot):
-        await pilot.press("j", "r")
+        await pilot.press("j", "enter", "r")
         journal.add("t-a", 2, "hermes", "claude", "ask", "advice", "meanwhile")  # last asked is now claude
         journal.add("t-z", 1, "user", "claude", "ask", "action", "a newer thread")
         app.action_reload()  # the timer firing while you type
@@ -266,7 +267,7 @@ def test_the_open_thread_stays_open_when_it_leaves_the_list(journal, monkeypatch
     app = board(journal)
 
     async def steps(pilot):
-        await pilot.press("j")
+        await pilot.press("j", "enter")
         await pilot.pause()
         journal.add("t-y", 1, "user", "claude", "ask", "action", "y")
         journal.add("t-z", 1, "user", "claude", "ask", "action", "z")
@@ -291,3 +292,198 @@ def test_markup_in_names_and_threads_is_shown_literally(agents_file):
 
     first, running = drive(app, steps)
     assert running and "[link=" in first
+
+
+# tele-style layout -----------------------------------------------------------------------
+
+
+def shown(app, widget_id: str) -> bool:
+    return bool(app.query_one(widget_id).display)
+
+
+def test_starts_on_the_logo_and_enter_opens_then_escape_closes(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        start = (shown(app, "#logo"), shown(app, "#log"), str(app.query_one("#pane2").border_title))
+        await pilot.press("enter")
+        await pilot.pause()
+        opened = (shown(app, "#logo"), shown(app, "#log"), app.current)
+        await pilot.press("escape")
+        await pilot.pause()
+        return start, opened, (shown(app, "#logo"), app.current)
+
+    start, opened, closed = drive(app, steps)
+    assert start == (True, False, "[2] (no thread)")
+    assert opened == (False, True, "t-b")
+    assert closed == (True, None)
+
+
+def test_folders_count_threads_per_agent(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        table = app.query_one("#folders", DataTable)
+        return {str(table.get_row_at(i)[0]): str(table.get_row_at(i)[1]) for i in range(table.row_count)}
+
+    folders = drive(app, steps)
+    assert folders == {"All": "[2]", "claude": "[1]", "hermes": "[1]", "Stopped": "", "Today": "[2]"}
+
+
+def test_picking_a_folder_filters_the_threads(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        await pilot.press("0", "j", "j")  # All -> claude -> hermes
+        await pilot.pause()
+        table = app.query_one("#threads", DataTable)
+        return app.folder, [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+
+    assert drive(app, steps) == ("agent:hermes", ["t-a"])
+
+
+def test_new_messages_get_an_unread_dot_until_opened(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        def flag() -> str:
+            table = app.query_one("#threads", DataTable)
+            return str(table.get_row_at(table.get_row_index("t-a"))[4])
+
+        before = flag()
+        journal.add("t-a", 2, "hermes", "user", "reply", "action", "news")
+        await pilot.press("g")
+        await pilot.pause()
+        dotted = flag()
+        app.open_thread("t-a")
+        await pilot.pause()
+        return before, dotted, flag()
+
+    assert drive(app, steps) == ("", "●", "")
+
+
+def test_mode_shows_insert_while_replying(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        await pilot.press("enter", "r")
+        await pilot.pause()
+        insert = str(app.query_one("#mode", Static).render())
+        await pilot.press("escape")
+        await pilot.pause()
+        return insert, str(app.query_one("#mode", Static).render())
+
+    assert drive(app, steps) == ("INSERT", "NORMAL")
+
+
+def test_h_l_and_numbers_move_between_panes(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        seen = []
+        for keys in (("l",), ("enter", "l"), ("h",), ("0",), ("2",)):
+            await pilot.press(*keys)
+            await pilot.pause()
+            seen.append(app.focused.id)
+        return seen
+
+    # no thread open: [2] holds only the logo, so "l" stays on threads
+    assert drive(app, steps) == ["threads", "log", "threads", "folders", "log"]
+
+
+# review fixes (tele layout) --------------------------------------------------------------
+
+
+def test_the_logo_shimmers_only_while_shown(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        first = app._step
+        app._shimmer()
+        moved = app._step
+        await pilot.press("enter")  # a thread hides the logo: the animation pauses
+        await pilot.pause()
+        hidden = app._step  # the real timer may have ticked before the logo was hidden
+        app._shimmer()
+        await pilot.pause(0.2)  # a few timer ticks while hidden
+        return first, moved, hidden, app._step
+
+    first, moved, hidden, later = drive(app, steps)
+    assert moved > first and later == hidden
+
+
+def test_the_chosen_folder_survives_refreshes_that_change_the_counts(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        await pilot.press("0", "j", "j")  # hermes
+        await pilot.pause()
+        for n in range(3):
+            journal.add(f"t-new{n}", 1, "user", "claude", "ask", "action", "more")
+            await pilot.press("g")
+            await pilot.pause()
+        table = app.query_one("#threads", DataTable)
+        return app.folder, [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+
+    assert drive(app, steps) == ("agent:hermes", ["t-a"])
+
+
+def test_your_own_messages_do_not_light_the_dot_and_stop_keeps_it(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        def flag(thread: str) -> str:
+            table = app.query_one("#threads", DataTable)
+            return str(table.get_row_at(table.get_row_index(thread))[4])
+
+        start = flag("t-a")
+        journal.add("t-a", 2, "user", "hermes", "ask", "action", "sent from another terminal")
+        await pilot.press("g")
+        await pilot.pause()
+        own = flag("t-a")
+        journal.add("t-a", 2, "hermes", "user", "reply", "action", "news")
+        journal.set_stopped("t-a", True)
+        await pilot.press("g")
+        await pilot.pause()
+        return start, own, flag("t-a")
+
+    assert drive(app, steps) == ("", "", "● STOP")
+
+
+def test_escape_closes_the_agents_view_and_focus_stays_visible(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        await pilot.press("enter", "l", "a")  # focus on the log, then the agents view hides it
+        await pilot.pause()
+        on_agents = app.focused.id
+        await pilot.press("escape")
+        await pilot.pause()
+        return on_agents, shown(app, "#agents"), shown(app, "#log"), app.focused.id
+
+    assert drive(app, steps) == ("agents", False, True, "threads")
+
+
+def test_escape_in_the_folders_keeps_the_focus_there(journal):
+    app = board(journal)
+
+    async def steps(pilot):
+        await pilot.press("enter", "0", "escape")
+        await pilot.pause()
+        return app.current, app.focused.id
+
+    assert drive(app, steps) == (None, "folders")
+
+
+def test_markup_in_agent_names_is_literal_in_the_folders(agents_file):
+    agents_file(CONFIG)
+    store = default_store()
+    store.add("t-1", 1, "user", "[red]x[/red]", "ask", "action", "hi")
+    app = board(store)
+
+    async def steps(pilot):
+        table = app.query_one("#folders", DataTable)
+        return [str(table.get_row_at(i)[0]) for i in range(table.row_count)], app.is_running
+
+    labels, running = drive(app, steps)
+    assert running and "[red]x[/red]" in labels

@@ -21,6 +21,8 @@ from .redact import redact
 from .taskstore import ACTIVE, TaskStore
 from .taskstore import Task as Task  # re-exported: callers import it from here
 
+USER_SENDER = "user"  # same value as envelope.USER (no import: envelope sits above the store)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, thread TEXT NOT NULL, hop INTEGER NOT NULL,
@@ -67,6 +69,7 @@ class ThreadSummary:
     last: float
     count: int
     stopped: bool
+    from_others: int = 0  # messages not written by the user (what can be unread)
 
 
 def _budget_reason(db: sqlite3.Connection, thread: str, now: float, max_calls: int, rate: int) -> str | None:
@@ -237,14 +240,15 @@ class Store(TaskStore):
 
     def threads(self, limit: int, only: str | None = None) -> tuple[ThreadSummary, ...]:
         """Threads, most recently active first; ``only`` = that single thread."""
-        where, args = ("WHERE m.thread = ? ", (only, limit)) if only else ("", (limit,))
+        where, args = ("WHERE m.thread = ? ", (USER_SENDER, only, limit)) if only else ("", (USER_SENDER, limit))
         with self._db() as db:
             rows = db.execute(
-                "SELECT m.thread, MIN(m.ts), MAX(m.ts), COUNT(*), COALESCE(t.stopped, 0) FROM messages m "
+                "SELECT m.thread, MIN(m.ts), MAX(m.ts), COUNT(*), COALESCE(t.stopped, 0), "
+                "SUM(m.sender != ?) FROM messages m "
                 f"LEFT JOIN threads t ON t.thread = m.thread {where}GROUP BY m.thread ORDER BY MAX(m.id) DESC LIMIT ?",
                 args,
             ).fetchall()
-        return tuple(ThreadSummary(r[0], r[1], r[2], r[3], bool(r[4])) for r in rows)
+        return tuple(ThreadSummary(r[0], r[1], r[2], r[3], bool(r[4]), int(r[5] or 0)) for r in rows)
 
     # threads ----------------------------------------------------------------
 

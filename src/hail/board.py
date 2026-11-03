@@ -22,6 +22,18 @@ class ThreadRow:
     messages: int
     stopped: bool
     agents: str  # who took part, besides you
+    last_ts: float = 0.0  # epoch seconds of the last message (for the "Today" folder)
+    from_others: int = 0  # messages written by agents or other senders (what can be unread)
+
+
+@dataclass(frozen=True)
+class FolderRow:
+    key: str  # ALL, STOPPED, TODAY or AGENT_PREFIX + name
+    label: str
+    count: int
+
+
+ALL, STOPPED, TODAY, AGENT_PREFIX = "all", "stopped", "today", "agent:"
 
 
 @dataclass(frozen=True)
@@ -60,8 +72,45 @@ def thread_rows(store: Store, limit: int, keep: str | None = None) -> tuple[Thre
             t.count,
             t.stopped,
             _people(people.get(t.thread, set())),
+            float(t.last),
+            t.from_others,
         )
         for t in threads
+    )
+
+
+def _parts(row: ThreadRow) -> frozenset[str]:
+    return frozenset(row.agents.split(", ")) if row.agents else frozenset()
+
+
+def _midnight(now: float) -> float:
+    # no mktime: it overflows on Windows for early timestamps; a DST shift moves this by an hour at most
+    day = time.localtime(now)
+    return now - (day.tm_hour * 3600 + day.tm_min * 60 + day.tm_sec)
+
+
+def in_folder(row: ThreadRow, key: str, now: float) -> bool:
+    """Whether a thread belongs in a folder of the left pane."""
+    if key == STOPPED:
+        return row.stopped
+    if key == TODAY:
+        return row.last_ts >= _midnight(now)
+    if key.startswith(AGENT_PREFIX):
+        return key[len(AGENT_PREFIX) :] in _parts(row)
+    return True
+
+
+def folder_rows(rows: Sequence[ThreadRow], agents: Sequence[str], now: float, keep: str = ALL) -> tuple[FolderRow, ...]:
+    """All, one folder per agent (configured ones first, then any other seen in the threads), Stopped, Today.
+
+    ``keep`` (the selected folder) stays listed, with 0 threads, when its agent left the latest threads.
+    """
+    kept = {keep[len(AGENT_PREFIX) :]} if keep.startswith(AGENT_PREFIX) else set()
+    seen = sorted((set().union(*(_parts(r) for r in rows)) | kept) - set(agents))
+    keys = (ALL, *(AGENT_PREFIX + n for n in (*agents, *seen)), STOPPED, TODAY)
+    labels = {ALL: "All", STOPPED: "Stopped", TODAY: "Today"}
+    return tuple(
+        FolderRow(k, labels.get(k, k[len(AGENT_PREFIX) :]), sum(in_folder(r, k, now) for r in rows)) for k in keys
     )
 
 
