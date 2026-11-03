@@ -5,6 +5,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7  # a release must be a week old: time for a hijacked one to be caught
     groups:
       actions:
         patterns: ["*"]
