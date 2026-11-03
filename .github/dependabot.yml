@@ -1,0 +1,10 @@
+# Pinned actions do not update themselves: Dependabot proposes new SHAs (and keeps the version comment).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
