@@ -1,3 +1,3 @@
 """hail - talk to your AI agents (Hermes, OpenClaw, Claude Code, anything) from anywhere."""
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
