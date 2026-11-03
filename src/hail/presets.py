@@ -85,6 +85,18 @@ PRESETS: Mapping[str, Preset] = MappingProxyType(
             defaults=MappingProxyType({"bin": "gemini"}),
             description="Legacy Gemini CLI (API key only since 2026-06-18; use agy), prompt on stdin",
         ),
+        # No advice switch: OpenCode's plan agent follows the user's global permissions ("*": "allow" wins).
+        "opencode": Preset(
+            argv=("{bin}", "run"),
+            defaults=MappingProxyType({"bin": "opencode"}),
+            description="OpenCode (opencode run, prompt on stdin)",
+        ),
+        # No advice switch: goose's chat-only mode is an environment setting (GOOSE_MODE), not a flag.
+        "goose": Preset(
+            argv=("{bin}", "run", "--no-session", "--quiet", "--instructions", "-"),
+            defaults=MappingProxyType({"bin": "goose"}),
+            description="Block's goose (goose run --quiet, prompt on stdin, no saved session)",
+        ),
         "ollama": Preset(
             argv=("{bin}", "run", "{model}"),
             defaults=MappingProxyType({"bin": "ollama", "model": "llama3.2"}),
