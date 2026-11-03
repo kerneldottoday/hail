@@ -55,6 +55,7 @@ class Outcome:
     text: str
     ok: bool
     exit_code: int = 0  # set when hail itself failed before or instead of the agent (council answers)
+    footer: str = ""  # the agent's status line: for you only, never for an agent caller nor the journal
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,8 @@ class Hub:
             self._log(ctx, "error", str(exc), reverse=True)
             raise
         self._log(ctx, "reply" if reply.ok else "error", reply.text, reverse=True)
-        return Outcome(thread, ctx.hop, agent.name, reply.text, reply.ok)
+        footer = reply.footer if sender == USER else ""  # an agent's costs and balance stay with you
+        return Outcome(thread, ctx.hop, agent.name, reply.text, reply.ok, footer=footer)
 
     def council(
         self,

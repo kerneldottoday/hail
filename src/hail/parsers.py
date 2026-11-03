@@ -11,6 +11,33 @@ HERMES_NOISE = (
     re.compile(r"^\S+ \[[▰▱]+\]"),  # usage / cost bar
     re.compile(r"^Warning: Unknown toolsets"),
 )
+MAX_FOOTER_LINES = 5  # a footer is a status line or two, never the answer itself
+MAX_FOOTER_CHARS = 500  # longer lines are never tried: a status line is short, and a bad regex stays cheap
+
+
+def split_footer(text: str, pattern: str | None) -> tuple[str, str]:
+    """Move the trailing lines that match ``pattern`` (the agent's own status line) out of the reply.
+
+    Only the last lines (split on newlines) are looked at, blank lines between them are dropped,
+    at most MAX_FOOTER_LINES are taken, and the reply before them is kept exactly as it was.
+    Returns (reply, footer); footer is "" when nothing matched.
+    """
+    if not pattern:
+        return text, ""
+    regex = re.compile(pattern)
+    footer: list[str] = []
+    cut = len(text)  # the reply is text[:cut]
+    while cut > 0 and len(footer) < MAX_FOOTER_LINES:
+        start = text.rfind("\n", 0, cut) + 1
+        line = text[start:cut].rstrip("\r")
+        if line.strip():
+            if len(line) > MAX_FOOTER_CHARS or not regex.search(line):
+                break
+            footer.insert(0, line)
+        cut = max(start - 1, 0)
+    if not footer:
+        return text, ""
+    return text[:cut].rstrip(), "\n".join(footer)
 
 
 def validate(parser: str) -> None:

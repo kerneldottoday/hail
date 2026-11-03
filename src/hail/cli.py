@@ -33,6 +33,7 @@ TEMPLATE = """\
 # host = "my-vps"
 # bin = "~/.local/bin/hermes"
 # timeout = 120
+# footer = '^cost: '           # its own status line under each answer: shown to you, kept from other agents
 
 # [agents.openclaw]
 # preset = "openclaw"

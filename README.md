@@ -128,6 +128,19 @@ forced_command = true         # send the message only; the server decides what r
 
 hail then sends nothing but the message, and `hail doctor` tests only the SSH connection. A stolen key gives the read-only agent and nothing else; with Tailscale, an ACL that opens only port 22 of that machine narrows it further. hail cannot see what the script runs, so the read-only part is yours to check.
 
+### Status lines (`footer`)
+
+Some agents end every answer with their own status line: model, cost, remaining balance. Describe it and hail keeps it out of the reply. You still see it (on stderr, or as `footer` with `--json`), but other agents, MCP callers, the journal, Telegram and background tasks only get the answer, so your costs and balance stay with you.
+
+```toml
+[agents.hermes]
+preset = "hermes"
+host = "my-vps"
+footer = '^cost: \$[\d.]+ · balance: '   # matches "cost: $0.025 · balance: $4.49" under each answer
+```
+
+`footer` is a regular expression (TOML single quotes keep backslashes as they are), tried with `re.search` on the last lines of the reply only; blank lines in between are skipped and at most 5 lines are taken. Lines over 500 characters are never tried. A pattern that matches an empty line is refused; anchor it anyway, since a loose one (`balance`) would also take the last lines of an answer that happen to match. An answer that is nothing but its footer counts as no answer (exit 6, whatever the agent's own exit code). `hail council` shows each agent's footer on stderr.
+
 Every setting that is not a known key (`bin`, `agent_id`, `session`, `max_turns`...) fills the preset template, so presets stay easy to tweak.
 
 ## Commands

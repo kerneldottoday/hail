@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from .config import Agent
 from .errors import AgentUnusable, Temporary, UsageError
 from .errors import HailError as HailError  # re-exported: older imports use hail.runner.HailError
-from .parsers import parse
+from .parsers import parse, split_footer
 from .presets import get_preset
 
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
@@ -52,6 +52,7 @@ class Reply:
     text: str
     raw: str
     exit_code: int
+    footer: str = ""  # the agent's own status line, moved out of text (see the 'footer' setting)
 
     @property
     def ok(self) -> bool:
@@ -197,7 +198,10 @@ def ask(
         if agent.is_remote and proc.returncode == SSH_FAILED:
             raise Temporary(f"'{agent.name}': ssh could not reach {agent.host} (exit 255): {err}")
         raise AgentUnusable(f"'{agent.name}' returned nothing (exit {proc.returncode}): {err}")
-    return Reply(agent=agent.name, text=text, raw=raw, exit_code=proc.returncode)
+    body, footer = split_footer(text, agent.footer)
+    if not body:
+        raise AgentUnusable(f"'{agent.name}' returned only its footer, no answer (exit {proc.returncode})")
+    return Reply(agent=agent.name, text=body, raw=raw, exit_code=proc.returncode, footer=footer)
 
 
 def _ssh_failed_early(agent: Agent, proc: subprocess.CompletedProcess[bytes], elapsed: float) -> bool:

@@ -11,7 +11,7 @@ description: Message the user's other AI agents (Hermes, OpenClaw, Claude Code o
 
 - List agents: `hail list`
 - Ask: `hail <agent> "message"`. For long or multi-line text: `printf '%s' "..." | hail <agent>`
-- For scripts: `hail <agent> --json "message"` returns `{"agent", "reply", "ok", "thread", "hop"}` on one line
+- For scripts: `hail <agent> --json "message"` returns `{"agent", "reply", "ok", "thread", "hop"}` on one line, plus `footer` (the agent's own status line: cost, balance) when its `footer` setting matched; it is not part of the reply
 - Full manual (exit codes, --json on every command, agents configured here): `hail help agents`
 - Exit codes: 0 ok, 4 the agent answered with an error, 5 unknown agent, 6 agent unusable, 7 refused by a guard rail (do not retry), 75 try again later
 - Health check: `hail doctor`

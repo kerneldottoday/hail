@@ -64,8 +64,10 @@ KNOWN_KEYS = frozenset(
         "cost",
         "forced_command",
         "max_calls_per_day",
+        "footer",
     }
 )
+MAX_FOOTER_PATTERN = 300
 COSTS = ("low", "medium", "high")
 ADVICE_KEYS = ("advice_command", "advice_agent_id", "advice_toolsets")  # read-only variants
 JOURNAL_KEYS = frozenset({"retention_days"})
@@ -91,6 +93,7 @@ class Agent:
     cost: str = "medium"
     forced_command: bool = False  # the server pins the command (authorized_keys command=): send the message only
     max_calls_per_day: int | None = None  # asks to this agent in any rolling 24 h, all callers together
+    footer: str | None = None  # regex: the agent's own trailing status line, shown to you, kept from agents
 
     @property
     def is_remote(self) -> bool:
@@ -203,7 +206,21 @@ def parse_agent(name: str, raw: Any) -> Agent:
         cost=_cost(name, raw.get("cost", "medium")),
         forced_command=_forced(name, raw, host),
         max_calls_per_day=_positive_int(name, raw, "max_calls_per_day", 0) if "max_calls_per_day" in raw else None,
+        footer=_footer(name, raw["footer"]) if "footer" in raw else None,
     )
+
+
+def _footer(name: str, value: Any) -> str:
+    """A regex for the agent's trailing status line: valid, short, and never matching a blank line."""
+    if not isinstance(value, str) or not value or len(value) > MAX_FOOTER_PATTERN:
+        raise ConfigError(f"agent '{name}': 'footer' must be a regular expression (1-{MAX_FOOTER_PATTERN} characters)")
+    try:
+        regex = re.compile(value)
+    except re.error as exc:
+        raise ConfigError(f"agent '{name}': 'footer' is not a valid regular expression ({exc})") from None
+    if regex.search(""):
+        raise ConfigError(f"agent '{name}': 'footer' matches an empty line, so it would take any line: anchor it")
+    return value
 
 
 def _advice_settings(name: str, preset_name: str, raw: dict[str, Any], command: str | None) -> dict[str, str]:

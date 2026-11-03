@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 import time
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from .app import make_app
 from .config import ConfigError
 from .errors import EXIT, HailError, NotFound, UsageError
 from .hub import CouncilResult, Outcome, Request
+from .jobs_inbox import clean
 from .store import Message, default_store
 from .telegram import Telegram, TelegramError
 
@@ -60,11 +60,14 @@ def _request(agent: str | None, parsed: Parsed) -> Request:
 def cmd_ask(agent: str | None, argv: list[str]) -> int:
     parsed = parse(argv)
     out = make_app().hub.consult(_request(agent, parsed))
+    footer = clean(out.footer)
     if "--json" in parsed.flags:
-        payload = {"agent": out.agent, "reply": out.text, "ok": out.ok, "thread": out.thread, "hop": out.hop}
-        print(json.dumps(payload, ensure_ascii=False))
+        row = {"agent": out.agent, "reply": out.text, "ok": out.ok, "thread": out.thread, "hop": out.hop}
+        print(render.dumps(render.compact({**row, "footer": footer})))
     else:
         print(out.text)
+        if footer:
+            print(footer, file=sys.stderr)  # the agent's status line: for you, not part of the reply
         print(f"hail: thread {out.thread} · hop {out.hop}", file=sys.stderr)
     if not out.ok:
         print(f"hail: '{out.agent}' exited with an error", file=sys.stderr)
@@ -143,7 +146,8 @@ def _council_exit(result: CouncilResult) -> int:
 
 
 def _outcome_row(out: Outcome) -> dict[str, object]:
-    return {"agent": out.agent, "reply": out.text, "ok": out.ok, "hop": out.hop}
+    row = {"agent": out.agent, "reply": out.text, "ok": out.ok, "hop": out.hop, "footer": clean(out.footer)}
+    return render.compact(row)
 
 
 def _council_row(result: CouncilResult) -> dict[str, object]:
@@ -159,6 +163,8 @@ def _council_row(result: CouncilResult) -> dict[str, object]:
 def _print_council(result: CouncilResult) -> None:
     for answer in result.answers:
         print(f"== {answer.agent}{'' if answer.ok else ' (failed)'}\n{answer.text}\n")
+        if answer.footer:
+            print(f"[{answer.agent}] {clean(answer.footer)}", file=sys.stderr)
     if result.synthesis:
         print(f"== synthesis by {result.synthesis.agent}\n{result.synthesis.text}")
 
