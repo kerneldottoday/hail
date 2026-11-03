@@ -2,7 +2,7 @@
 
 ![hail in 45 seconds: one command to reach any agent, agents that consult each other, read-only advice mode, one inbox](https://raw.githubusercontent.com/kerneldottoday/hail/main/docs/demo.gif)
 
-**Talk to your AI agents from anywhere, and let them talk to each other.** One command to message Hermes, OpenClaw, Claude Code, Codex, Antigravity CLI (`agy`), a local Ollama model or any CLI agent, on this machine or on a server over SSH, from your terminal or from any MCP client. When an agent is stuck, it can consult another one itself, with loop guards, a journal and an optional Telegram channel to watch it happen.
+**Talk to your AI agents from anywhere, and let them talk to each other.** One command to message Hermes, OpenClaw, Claude Code, Codex, Antigravity CLI (`agy`), OpenCode, goose, a local Ollama model or any CLI agent, on this machine or on a server over SSH, from your terminal or from any MCP client. When an agent is stuck, it can consult another one itself, with loop guards, a journal and an optional Telegram channel to watch it happen.
 
 ```bash
 hail hermes "Is the nightly scraper still running? One line."
@@ -16,7 +16,7 @@ No copy-paste between chat windows. No new server, no open port, no runtime depe
 
 You run agents in different places: Hermes on a VPS, OpenClaw behind Telegram, Claude Code on your laptop. Getting them to talk usually means copying text between windows, or deploying a dashboard and opening an API to the internet.
 
-hail is the small missing piece: a thin, auditable bridge (about 3,000 lines of Python, standard library only) that turns "ask that agent" into a single command or MCP tool call, for you and for your agents.
+hail is the small missing piece: a thin, auditable bridge (about 4,000 lines of Python, standard library only; the optional keyboard screen adds Textual) that turns "ask that agent" into a single command or MCP tool call, for you and for your agents.
 
 | | hail | Agent dashboards | Per-agent MCP bridges |
 |---|---|---|---|
@@ -24,6 +24,19 @@ hail is the small missing piece: a thin, auditable bridge (about 3,000 lines of 
 | Network exposure | SSH only | web UI | agent API exposed |
 | Agents | any CLI agent | supported runtimes | one agent each |
 | Install | one command | Docker / Node | Docker |
+
+### Related projects
+
+Checked on 3 November 2026. Each one solves a neighbouring problem; pick the one that matches yours.
+
+| Project | What it is | Other machines | Needs | Use it when |
+|---|---|---|---|---|
+| [A2A](https://github.com/a2aproject/A2A) | an open protocol, with SDKs, for agents that talk over HTTP (JSON-RPC) | yes, each agent is an HTTP service | a server per agent | you build agent services that must interoperate |
+| [PAL MCP server](https://github.com/BeehiveInnovations/pal-mcp-server) | an MCP server that gives your CLI agent other models (through their APIs) and `clink` to start other CLI agents as subagents | no, the CLIs run where it runs | model API keys | you want second opinions from many models inside one session (last commit December 2025) |
+| [Agent Mail](https://github.com/Dicklesworthstone/mcp_agent_mail_rust) | mailboxes, threads and file reservations for coding agents that work on the same repository, with a TUI and a web UI | through its HTTP server | an HTTP MCP server (Linux, macOS) | several coding agents edit one codebase together |
+| [claude-code-mcp](https://github.com/steipete/claude-code-mcp) | Claude Code as a one-shot MCP server | no | Node | archived in 2026 |
+
+hail is the small option: agents you already run, on this machine or any machine you reach over SSH, from the shell, an MCP client or Telegram, with no server to deploy and nothing exposed beyond SSH.
 
 ## Install
 
@@ -102,10 +115,12 @@ parser = "json:answer"       # optional: text (default), hermes, json:<key>
 | `codex` | `codex exec --skip-git-repo-check -`, message on stdin | plain text (final message) |
 | `agy` | `agy -p <msg> --output-format json` (Google Antigravity CLI; the message is an argument, visible in `ps` on that machine) | `response` |
 | `gemini` | legacy Gemini CLI, message on stdin (API key only since 18 June 2026: use `agy`) | plain text |
+| `opencode` | `opencode run`, message on stdin | plain text |
+| `goose` | `goose run --no-session --quiet --instructions -`, message on stdin | plain text |
 | `ollama` | `ollama run <model>` (default `llama3.2`), message on stdin | plain text |
 | `command` | your command, message on stdin | `text` or `json:<key>` |
 
-In `advice` mode, `claude` runs with `--permission-mode plan`, `codex` with `--sandbox read-only` and `hermes` with read-only toolsets only (`-t web,session_search,vision,hail`: no terminal, files, code, browser or cron; narrow it with `advice_toolsets`, which only accepts read-only toolsets). OpenClaw switches to a read-only agent you define (`advice_agent_id = "advisor"`), and a `command` agent can name its read-only variant (`advice_command = "mybot --read-only"`). `hail list` marks the agents whose advice is only an instruction. `agy --mode plan` only adds a `/plan` prefix to the prompt and Gemini's plan mode switches to auto-approval once the plan is done in headless runs, so hail uses neither: for `agy` and `gemini`, advice is an instruction, not a sandbox. An `ollama` model has no tools at all, which makes it a cheap, safe second opinion.
+In `advice` mode, `claude` runs with `--permission-mode plan`, `codex` with `--sandbox read-only` and `hermes` with read-only toolsets only (`-t web,session_search,vision,hail`: no terminal, files, code, browser or cron; narrow it with `advice_toolsets`, which only accepts read-only toolsets). OpenClaw switches to a read-only agent you define (`advice_agent_id = "advisor"`), and a `command` agent can name its read-only variant (`advice_command = "mybot --read-only"`). `hail list` marks the agents whose advice is only an instruction. `agy --mode plan` only adds a `/plan` prefix to the prompt and Gemini's plan mode switches to auto-approval once the plan is done in headless runs, so hail uses neither: for `agy` and `gemini`, advice is an instruction, not a sandbox. The same goes for `opencode` (its plan agent follows your global permissions, so `"*": "allow"` also opens it up) and `goose` (its chat-only mode is the `GOOSE_MODE` setting, not a flag). An `ollama` model has no tools at all, which makes it a cheap, safe second opinion.
 
 ### Paid agents and pinned SSH keys
 
@@ -312,7 +327,7 @@ On the server the agent runs under `timeout` (coreutils) with the same limit, so
 - **hail_ask is a prompt-injection path.** If an MCP client can call `hail_ask` and the target agent has tools (shell, email, files), whatever text reaches the client can end up as a request to that agent. Only configure agents whose permissions you are comfortable exposing, and prefer read-only agents.
 - hail stores every message in `~/.hail/hail.db` on the machine that makes the call (secrets masked by pattern, which is a safety net). hail creates it owner-only (`700`, file `600`) and tightens it on every start; prune it, or delete it to forget. It posts to a chat only if you configure `[telegram]` (secrets are redacted with patterns, which is a safety net, not a guarantee). OpenClaw runs without `--deliver`.
 - **`[policy] cli_access`** decides what an agent that runs hail may do: `all` (default), `read` (list, doctor, log, threads, thread, status, jobs, inbox; no ask, send, council, stop, resume, prune, add, init, telegram, and no `inbox read` or `clear`, which mark items as read) or `none` (only `hail help`). A refusal exits 7. It applies to calls from an agent (`HAIL_SELF` set, or any MCP caller), never to you, and guards hail's own commands only: a program running as you can still read `~/.hail` and the agents file, unset `HAIL_SELF`, or point `HAIL_CONFIG` at a file of its own. `hail mcp` itself always starts (each tool is checked), and a background task allowed when it was sent still runs. For an agent, an invalid agents file now stops every command but `help` (exit 3).
-- **Advice mode is enforced only where the agent has a read-only switch**: Claude Code (`--permission-mode plan`), Codex (`--sandbox read-only`), Hermes (read-only toolsets), OpenClaw with `advice_agent_id`, `command` agents with `advice_command`, and Ollama (no tools). Elsewhere (`agy`, Gemini, OpenClaw or `command` without a read-only variant) it is an instruction in the header, not a sandbox. Set `strict_advice = true` under `[policy]` so agents can only consult agents that enforce it; you can still ask any of them yourself. hail checks that `advice_agent_id` and `advice_command` differ from the full agent, not that they are really read-only: that part is yours. Strict mode applies to calls hail sees as coming from an agent (`HAIL_SELF` set, or an MCP caller); an agent that runs `hail` in a shell where `HAIL_SELF` was removed counts as you.
+- **Advice mode is enforced only where the agent has a read-only switch**: Claude Code (`--permission-mode plan`), Codex (`--sandbox read-only`), Hermes (read-only toolsets), OpenClaw with `advice_agent_id`, `command` agents with `advice_command`, and Ollama (no tools). Elsewhere (`agy`, Gemini, OpenCode, goose, OpenClaw or `command` without a read-only variant) it is an instruction in the header, not a sandbox. Set `strict_advice = true` under `[policy]` so agents can only consult agents that enforce it; you can still ask any of them yourself. hail checks that `advice_agent_id` and `advice_command` differ from the full agent, not that they are really read-only: that part is yours. Strict mode applies to calls hail sees as coming from an agent (`HAIL_SELF` set, or an MCP caller); an agent that runs `hail` in a shell where `HAIL_SELF` was removed counts as you.
 - Identity: an agent is *verified* when hail exported `HAIL_SELF` to it (or declared it in its MCP config). An MCP caller that only *claims* a name with `from` may ask for advice, never for an action, unless the journal shows it was really asked something in that thread; an unidentified MCP caller is `unknown-agent`, never you. `/ask` from Telegram (allowed users only) runs as you, in action mode.
 - Agents consulting each other multiply the prompt-injection paths: keep the default `advice` mode, grant `[policy.act]` sparingly, and read the journal.
 - For local presets that take the message as an argument (`hermes`, `openclaw`), the message is visible in the local process list while the call runs. Remote messages travel only on the SSH channel.
