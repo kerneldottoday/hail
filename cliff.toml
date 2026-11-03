@@ -1,0 +1,40 @@
+# git-cliff configuration: `git cliff -o CHANGELOG.md` (add `--tag vX.Y.Z` when releasing)
+[changelog]
+header = """
+# Changelog
+
+All notable changes to hail. Versions follow [semantic versioning](https://semver.org); \
+before 1.0, a minor version may change commands or output.
+
+"""
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+
+[git]
+conventional_commits = true
+# "feat: hail 0.6.0, idempotent send" -> "feat: idempotent send" (the version is already the heading)
+commit_preprocessors = [
+  { pattern = '^(\w+(?:\(.*\))?!?: )hail v?[0-9.]+,?\s*', replace = '$1' },
+]
+filter_unconventional = true
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Added" },
+  { message = "^fix", group = "<!-- 1 -->Fixed" },
+  { message = "^docs", group = "<!-- 2 -->Documentation" },
+  { message = "^ci", group = "<!-- 3 -->CI and security" },
+  { message = "^chore", skip = true },
+]
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
